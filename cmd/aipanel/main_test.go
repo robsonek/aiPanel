@@ -29,7 +29,7 @@ func TestNewHandler_ServesHealth(t *testing.T) {
 		t.Fatalf("init sqlite: %v", err)
 	}
 	iamSvc := iam.NewService(store, cfg, logger.New("test"))
-	handler := newHandler(cfg, logger.New("test"), iamSvc)
+	handler := newHandler(cfg, logger.New("test"), iamSvc, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
@@ -60,7 +60,7 @@ func TestNewHandler_ServesIndexHTML(t *testing.T) {
 		t.Fatalf("init sqlite: %v", err)
 	}
 	iamSvc := iam.NewService(store, cfg, logger.New("test"))
-	handler := newHandler(cfg, logger.New("test"), iamSvc)
+	handler := newHandler(cfg, logger.New("test"), iamSvc, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
@@ -91,7 +91,7 @@ func TestNewHandler_ProtectsAPI(t *testing.T) {
 		t.Fatalf("init sqlite: %v", err)
 	}
 	iamSvc := iam.NewService(store, cfg, logger.New("test"))
-	handler := newHandler(cfg, logger.New("test"), iamSvc)
+	handler := newHandler(cfg, logger.New("test"), iamSvc, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
 	rec := httptest.NewRecorder()

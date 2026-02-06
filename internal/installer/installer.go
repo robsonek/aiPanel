@@ -3,7 +3,9 @@ package installer
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -17,9 +19,14 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"text/template"
 	"time"
 
 	"github.com/robsonek/aiPanel/internal/installer/steps"
+	"github.com/robsonek/aiPanel/internal/modules/iam"
+	"github.com/robsonek/aiPanel/internal/platform/config"
+	"github.com/robsonek/aiPanel/internal/platform/logger"
+	"github.com/robsonek/aiPanel/internal/platform/sqlite"
 	"github.com/robsonek/aiPanel/internal/platform/systemd"
 )
 
@@ -35,11 +42,19 @@ type Options struct {
 	StateFilePath    string
 	ReportFilePath   string
 	LogFilePath      string
+	AdminEmail       string
+	AdminPassword    string
 
 	OSReleasePath string
 	MemInfoPath   string
 	Proc1ExePath  string
 	RootFSPath    string
+
+	NginxSitesAvailableDir string
+	NginxSitesEnabledDir   string
+	PHPBaseDir             string
+	PanelVhostTemplatePath string
+	CatchAllTemplatePath   string
 
 	MinCPU      int
 	MinMemoryMB int
@@ -51,24 +66,31 @@ type Options struct {
 // DefaultOptions returns production defaults for installer phase 1.
 func DefaultOptions() Options {
 	return Options{
-		Addr:             ":8080",
-		Env:              "prod",
-		ConfigPath:       "/etc/aipanel/panel.yaml",
-		DataDir:          "/var/lib/aipanel",
-		PanelBinaryPath:  "/usr/local/bin/aipanel",
-		UnitFilePath:     "/etc/systemd/system/aipanel.service",
-		StateFilePath:    "/var/lib/aipanel/.installer-state.json",
-		ReportFilePath:   "/var/lib/aipanel/install-report.json",
-		LogFilePath:      "/var/log/aipanel/install.log",
-		OSReleasePath:    "/etc/os-release",
-		MemInfoPath:      "/proc/meminfo",
-		Proc1ExePath:     "/proc/1/exe",
-		RootFSPath:       "/",
-		MinCPU:           2,
-		MinMemoryMB:      1024,
-		MinDiskGB:        10,
-		SkipHealthcheck:  false,
-		SourceBinaryPath: "",
+		Addr:                   ":8080",
+		Env:                    "prod",
+		ConfigPath:             "/etc/aipanel/panel.yaml",
+		DataDir:                "/var/lib/aipanel",
+		PanelBinaryPath:        "/usr/local/bin/aipanel",
+		UnitFilePath:           "/etc/systemd/system/aipanel.service",
+		StateFilePath:          "/var/lib/aipanel/.installer-state.json",
+		ReportFilePath:         "/var/lib/aipanel/install-report.json",
+		LogFilePath:            "/var/log/aipanel/install.log",
+		AdminEmail:             "admin@example.com",
+		AdminPassword:          "ChangeMe12345!",
+		OSReleasePath:          "/etc/os-release",
+		MemInfoPath:            "/proc/meminfo",
+		Proc1ExePath:           "/proc/1/exe",
+		RootFSPath:             "/",
+		NginxSitesAvailableDir: "/etc/nginx/sites-available",
+		NginxSitesEnabledDir:   "/etc/nginx/sites-enabled",
+		PHPBaseDir:             "/etc/php",
+		PanelVhostTemplatePath: "configs/templates/nginx_panel_vhost.conf.tmpl",
+		CatchAllTemplatePath:   "configs/templates/nginx_catchall.conf.tmpl",
+		MinCPU:                 2,
+		MinMemoryMB:            1024,
+		MinDiskGB:              10,
+		SkipHealthcheck:        false,
+		SourceBinaryPath:       "",
 	}
 }
 
@@ -101,6 +123,12 @@ func (o Options) withDefaults() Options {
 	if strings.TrimSpace(o.LogFilePath) == "" {
 		o.LogFilePath = d.LogFilePath
 	}
+	if strings.TrimSpace(o.AdminEmail) == "" {
+		o.AdminEmail = d.AdminEmail
+	}
+	if strings.TrimSpace(o.AdminPassword) == "" {
+		o.AdminPassword = d.AdminPassword
+	}
 	if strings.TrimSpace(o.OSReleasePath) == "" {
 		o.OSReleasePath = d.OSReleasePath
 	}
@@ -112,6 +140,21 @@ func (o Options) withDefaults() Options {
 	}
 	if strings.TrimSpace(o.RootFSPath) == "" {
 		o.RootFSPath = d.RootFSPath
+	}
+	if strings.TrimSpace(o.NginxSitesAvailableDir) == "" {
+		o.NginxSitesAvailableDir = d.NginxSitesAvailableDir
+	}
+	if strings.TrimSpace(o.NginxSitesEnabledDir) == "" {
+		o.NginxSitesEnabledDir = d.NginxSitesEnabledDir
+	}
+	if strings.TrimSpace(o.PHPBaseDir) == "" {
+		o.PHPBaseDir = d.PHPBaseDir
+	}
+	if strings.TrimSpace(o.PanelVhostTemplatePath) == "" {
+		o.PanelVhostTemplatePath = d.PanelVhostTemplatePath
+	}
+	if strings.TrimSpace(o.CatchAllTemplatePath) == "" {
+		o.CatchAllTemplatePath = d.CatchAllTemplatePath
 	}
 	if o.MinCPU <= 0 {
 		o.MinCPU = d.MinCPU
@@ -223,6 +266,15 @@ func (i *Installer) Run(ctx context.Context) (*Report, error) {
 
 	runErr := execStep(steps.Preflight, i.runPreflight)
 	if runErr == nil {
+		runErr = execStep(steps.SystemUpdate, i.runSystemUpdate)
+	}
+	if runErr == nil {
+		runErr = execStep(steps.AddRepos, i.addRepositories)
+	}
+	if runErr == nil {
+		runErr = execStep(steps.InstallPkgs, i.installPackages)
+	}
+	if runErr == nil {
 		runErr = execStep(steps.PrepareDirs, i.prepareDirectories)
 	}
 	if runErr == nil {
@@ -238,10 +290,22 @@ func (i *Installer) Run(ctx context.Context) (*Report, error) {
 		runErr = execStep(steps.InstallNginx, i.installNginx)
 	}
 	if runErr == nil {
+		runErr = execStep(steps.InitDatabases, i.initDatabases)
+	}
+	if runErr == nil {
+		runErr = execStep(steps.ConfigureNginx, i.configureNginx)
+	}
+	if runErr == nil {
+		runErr = execStep(steps.ConfigurePHP, i.configurePHPFPM)
+	}
+	if runErr == nil {
 		runErr = execStep(steps.WriteUnit, i.writeUnitFile)
 	}
 	if runErr == nil {
 		runErr = execStep(steps.StartPanel, i.startPanelService)
+	}
+	if runErr == nil {
+		runErr = execStep(steps.CreateAdmin, i.createAdminUser)
 	}
 	if runErr == nil {
 		runErr = execStep(steps.Healthcheck, i.runHealthcheck)
@@ -296,6 +360,72 @@ func (i *Installer) runPreflight(_ context.Context) error {
 	}
 	if freeGB < i.opts.MinDiskGB {
 		return fmt.Errorf("insufficient disk: need at least %d GB free", i.opts.MinDiskGB)
+	}
+	return nil
+}
+
+func (i *Installer) runSystemUpdate(ctx context.Context) error {
+	if _, err := i.runner.Run(ctx, "apt-get", "update"); err != nil {
+		return fmt.Errorf("apt update: %w", err)
+	}
+	if _, err := i.runner.Run(ctx, "apt-get", "upgrade", "-y"); err != nil {
+		return fmt.Errorf("apt upgrade: %w", err)
+	}
+	return nil
+}
+
+func (i *Installer) addRepositories(ctx context.Context) error {
+	if _, err := i.runner.Run(ctx, "apt-get", "install", "-y", "ca-certificates", "curl", "gnupg", "lsb-release"); err != nil {
+		i.logf("[add_repositories] fallback to distro packages: %v", err)
+		return nil
+	}
+	if _, err := i.runner.Run(ctx, "mkdir", "-p", "/etc/apt/keyrings"); err != nil {
+		i.logf("[add_repositories] cannot create keyring dir, skipping sury repo: %v", err)
+		return nil
+	}
+	if _, err := i.runner.Run(ctx, "bash", "-lc", "curl -fsSL https://packages.sury.org/php/apt.gpg | gpg --dearmor -o /etc/apt/keyrings/sury-php.gpg"); err != nil {
+		i.logf("[add_repositories] sury key setup failed, using distro packages: %v", err)
+		return nil
+	}
+	if _, err := i.runner.Run(ctx, "bash", "-lc", "echo \"deb [signed-by=/etc/apt/keyrings/sury-php.gpg] https://packages.sury.org/php/ $(lsb_release -sc) main\" > /etc/apt/sources.list.d/sury-php.list"); err != nil {
+		i.logf("[add_repositories] sury repo setup failed, using distro packages: %v", err)
+		return nil
+	}
+	if _, err := i.runner.Run(ctx, "apt-get", "update"); err != nil {
+		i.logf("[add_repositories] apt update after sury failed, using distro packages: %v", err)
+		return nil
+	}
+	return nil
+}
+
+func (i *Installer) installPackages(ctx context.Context) error {
+	primary := []string{
+		"apt-get", "install", "-y",
+		"nginx",
+		"php8.3-fpm",
+		"php8.4-fpm",
+		"mariadb-server",
+		"acl",
+		"curl",
+		"git",
+	}
+	if _, err := i.runner.Run(ctx, primary[0], primary[1:]...); err == nil {
+		return nil
+	}
+	// Fallback for environments where php8.4 package is unavailable.
+	if _, err := i.runner.Run(
+		ctx,
+		"apt-get",
+		"install",
+		"-y",
+		"nginx",
+		"php8.3-fpm",
+		"mariadb-server",
+		"acl",
+		"curl",
+		"git",
+	); err != nil {
+		return fmt.Errorf("apt install packages: %w", err)
 	}
 	return nil
 }
@@ -402,14 +532,131 @@ func (i *Installer) createServiceUser(ctx context.Context) error {
 }
 
 func (i *Installer) installNginx(ctx context.Context) error {
-	if _, err := i.runner.Run(ctx, "apt-get", "update"); err != nil {
-		return fmt.Errorf("apt update: %w", err)
-	}
-	if _, err := i.runner.Run(ctx, "apt-get", "install", "-y", "nginx"); err != nil {
-		return fmt.Errorf("apt install nginx: %w", err)
-	}
 	if err := systemd.EnableNow(ctx, i.runner, "nginx"); err != nil {
 		return fmt.Errorf("start nginx: %w", err)
+	}
+	return nil
+}
+
+func (i *Installer) initDatabases(ctx context.Context) error {
+	store := sqlite.New(i.opts.DataDir)
+	if err := store.Init(ctx); err != nil {
+		return fmt.Errorf("init sqlite databases: %w", err)
+	}
+	return nil
+}
+
+func (i *Installer) configureNginx(ctx context.Context) error {
+	panelPort := parsePort(i.opts.Addr, "8080")
+	panelContent, err := renderTemplateWithFallback(
+		i.opts.PanelVhostTemplatePath,
+		defaultPanelVhostTemplate,
+		map[string]string{"PanelPort": panelPort},
+	)
+	if err != nil {
+		return fmt.Errorf("render panel vhost template: %w", err)
+	}
+	catchallContent, err := renderTemplateWithFallback(
+		i.opts.CatchAllTemplatePath,
+		defaultCatchallTemplate,
+		nil,
+	)
+	if err != nil {
+		return fmt.Errorf("render catchall template: %w", err)
+	}
+
+	availDir := i.opts.NginxSitesAvailableDir
+	enableDir := i.opts.NginxSitesEnabledDir
+	if err := os.MkdirAll(availDir, 0o750); err != nil {
+		return fmt.Errorf("create nginx sites-available dir: %w", err)
+	}
+	if err := os.MkdirAll(enableDir, 0o750); err != nil {
+		return fmt.Errorf("create nginx sites-enabled dir: %w", err)
+	}
+
+	panelPath := filepath.Join(availDir, "aipanel.conf")
+	catchallPath := filepath.Join(availDir, "aipanel-catchall.conf")
+	if err := writeTextFile(panelPath, panelContent, 0o644); err != nil {
+		return fmt.Errorf("write panel vhost: %w", err)
+	}
+	if err := writeTextFile(catchallPath, catchallContent, 0o644); err != nil {
+		return fmt.Errorf("write catchall vhost: %w", err)
+	}
+
+	panelLink := filepath.Join(enableDir, "aipanel.conf")
+	catchallLink := filepath.Join(enableDir, "aipanel-catchall.conf")
+	if err := os.Remove(panelLink); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove old panel symlink: %w", err)
+	}
+	if err := os.Remove(catchallLink); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove old catchall symlink: %w", err)
+	}
+	if err := os.Symlink(panelPath, panelLink); err != nil {
+		return fmt.Errorf("create panel symlink: %w", err)
+	}
+	if err := os.Symlink(catchallPath, catchallLink); err != nil {
+		return fmt.Errorf("create catchall symlink: %w", err)
+	}
+
+	if _, err := i.runner.Run(ctx, "nginx", "-t"); err != nil {
+		return fmt.Errorf("test nginx config: %w", err)
+	}
+	if _, err := i.runner.Run(ctx, "systemctl", "reload", "nginx"); err != nil {
+		return fmt.Errorf("reload nginx: %w", err)
+	}
+	return nil
+}
+
+func (i *Installer) configurePHPFPM(ctx context.Context) error {
+	versions := []string{"8.3", "8.4"}
+	for _, version := range versions {
+		path := filepath.Join(i.opts.PHPBaseDir, version, "fpm", "pool.d", "aipanel-default.conf")
+		if err := writeTextFile(path, defaultPHPPoolTemplate, 0o644); err != nil {
+			return fmt.Errorf("write php-fpm default pool for %s: %w", version, err)
+		}
+		if _, err := i.runner.Run(ctx, "systemctl", "restart", "php"+version+"-fpm"); err != nil {
+			// Keep installer resilient when only one version is available.
+			i.logf("[configure_phpfpm] restart php%s-fpm failed: %v", version, err)
+		}
+	}
+	return nil
+}
+
+func (i *Installer) createAdminUser(ctx context.Context) error {
+	cfg := config.Config{
+		Addr:              i.opts.Addr,
+		Env:               i.opts.Env,
+		DataDir:           i.opts.DataDir,
+		SessionCookieName: "aipanel_session",
+		SessionTTL:        24 * time.Hour,
+	}
+	store := sqlite.New(i.opts.DataDir)
+	if err := store.Init(ctx); err != nil {
+		return fmt.Errorf("init sqlite before create admin: %w", err)
+	}
+	iamSvc := iam.NewService(store, cfg, logger.New(cfg.Env))
+	email := strings.TrimSpace(i.opts.AdminEmail)
+	password := strings.TrimSpace(i.opts.AdminPassword)
+	if email == "" {
+		email = "admin@example.com"
+	}
+	if password == "" {
+		generated, err := randomPassword()
+		if err != nil {
+			return fmt.Errorf("generate admin password: %w", err)
+		}
+		password = generated
+	}
+	if err := iamSvc.CreateAdmin(ctx, email, password); err != nil {
+		// Idempotent reruns can fail with unique email conflict.
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			i.logf("[create_admin] admin %s already exists", email)
+			return nil
+		}
+		return fmt.Errorf("create admin user: %w", err)
+	}
+	if strings.TrimSpace(i.opts.AdminPassword) == "" {
+		i.logf("[create_admin] generated admin credentials email=%s password=%s", email, password)
 	}
 	return nil
 }
@@ -436,6 +683,16 @@ func (i *Installer) runHealthcheck(ctx context.Context) error {
 	if i.opts.SkipHealthcheck {
 		return nil
 	}
+	for _, unit := range []string{"nginx", "php8.3-fpm", "php8.4-fpm", "mariadb"} {
+		active, err := systemd.IsActive(ctx, i.runner, unit)
+		if err != nil {
+			return fmt.Errorf("check %s status: %w", unit, err)
+		}
+		if !active {
+			return fmt.Errorf("%s is not active", unit)
+		}
+	}
+
 	hctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
@@ -634,6 +891,77 @@ func healthURL(addr string) string {
 	}
 	return fmt.Sprintf("http://%s/health", net.JoinHostPort(host, port))
 }
+
+func parsePort(addr, fallback string) string {
+	if strings.TrimSpace(addr) == "" {
+		return fallback
+	}
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil || strings.TrimSpace(port) == "" {
+		return fallback
+	}
+	return port
+}
+
+func renderTemplateWithFallback(path, fallback string, data any) (string, error) {
+	content, err := os.ReadFile(path) //nolint:gosec // Installer controls template path.
+	if err != nil {
+		content = []byte(fallback)
+	}
+	tpl, err := template.New(filepath.Base(path)).Parse(string(content))
+	if err != nil {
+		return "", err
+	}
+	var b bytes.Buffer
+	if err := tpl.Execute(&b, data); err != nil {
+		return "", err
+	}
+	return b.String(), nil
+}
+
+func randomPassword() (string, error) {
+	buf := make([]byte, 12)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+const defaultPanelVhostTemplate = `server {
+    listen 80;
+    server_name _;
+
+    access_log /var/log/nginx/aipanel.access.log;
+    error_log /var/log/nginx/aipanel.error.log;
+
+    location / {
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_pass http://127.0.0.1:{{ .PanelPort }};
+    }
+}
+`
+
+const defaultCatchallTemplate = `server {
+    listen 80 default_server;
+    server_name _;
+    return 444;
+}
+`
+
+const defaultPHPPoolTemplate = `[aipanel-default]
+user = www-data
+group = www-data
+listen = /run/php/aipanel-default.sock
+listen.owner = www-data
+listen.group = www-data
+listen.mode = 0660
+pm = ondemand
+pm.max_children = 10
+pm.process_idle_timeout = 10s
+`
 
 func renderPanelConfig(opts Options) string {
 	return fmt.Sprintf(

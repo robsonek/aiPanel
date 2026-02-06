@@ -13,15 +13,25 @@ import (
 	"strings"
 
 	aipanel "github.com/robsonek/aiPanel"
+	"github.com/robsonek/aiPanel/internal/modules/database"
+	"github.com/robsonek/aiPanel/internal/modules/hosting"
 	"github.com/robsonek/aiPanel/internal/modules/iam"
 	"github.com/robsonek/aiPanel/internal/platform/config"
 	"github.com/robsonek/aiPanel/internal/platform/middleware"
 )
 
 // NewHandler creates the root HTTP handler for panel API and frontend.
-func NewHandler(cfg config.Config, log *slog.Logger, iamSvc *iam.Service) http.Handler {
+func NewHandler(
+	cfg config.Config,
+	log *slog.Logger,
+	iamSvc *iam.Service,
+	hostingSvc *hosting.Service,
+	databaseSvc *database.Service,
+) http.Handler {
 	mux := http.NewServeMux()
 	secureCookie := !strings.EqualFold(cfg.Env, "dev") && !strings.EqualFold(cfg.Env, "test")
+	hostingHandler := hosting.NewHandler(hostingSvc)
+	databaseHandler := database.NewHandler(databaseSvc)
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -116,6 +126,48 @@ func NewHandler(cfg config.Config, log *slog.Logger, iamSvc *iam.Service) http.H
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})))
 
+	if hostingSvc != nil {
+		mux.Handle("/api/sites", requireAdmin(iamSvc, cfg.SessionCookieName, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			u, _ := userFromContext(r.Context())
+			hostingHandler.HandleSites(w, r, u.Email)
+		})))
+
+		mux.Handle("/api/sites/", requireAdmin(iamSvc, cfg.SessionCookieName, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			u, _ := userFromContext(r.Context())
+			if strings.HasSuffix(strings.Trim(r.URL.Path, "/"), "databases") {
+				if databaseSvc == nil {
+					http.Error(w, "database service unavailable", http.StatusServiceUnavailable)
+					return
+				}
+				siteID, err := database.ParseSiteIDFromDatabasesPath(r.URL.Path)
+				if err != nil {
+					http.Error(w, "invalid site id", http.StatusBadRequest)
+					return
+				}
+				databaseHandler.HandleSiteDatabases(w, r, siteID, u.Email)
+				return
+			}
+			siteID, err := hosting.ParseSiteID(r.URL.Path)
+			if err != nil {
+				http.Error(w, "invalid site id", http.StatusBadRequest)
+				return
+			}
+			hostingHandler.HandleSiteByID(w, r, siteID, u.Email)
+		})))
+	}
+
+	if databaseSvc != nil {
+		mux.Handle("/api/databases/", requireAdmin(iamSvc, cfg.SessionCookieName, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			u, _ := userFromContext(r.Context())
+			id, err := database.ParseDatabaseID(r.URL.Path)
+			if err != nil {
+				http.Error(w, "invalid database id", http.StatusBadRequest)
+				return
+			}
+			databaseHandler.HandleDatabaseByID(w, r, id, u.Email)
+		})))
+	}
+
 	frontend := frontendHandler(cfg, log)
 	mux.Handle("/", frontend)
 
@@ -143,6 +195,21 @@ func requireAuth(iamSvc *iam.Service, cookieName string, next http.Handler) http
 		ctx := context.WithValue(r.Context(), authUserKey, user)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func requireAdmin(iamSvc *iam.Service, cookieName string, next http.Handler) http.Handler {
+	return requireAuth(iamSvc, cookieName, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, ok := userFromContext(r.Context())
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if u.Role != "admin" {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	}))
 }
 
 func userFromContext(ctx context.Context) (iam.User, bool) {

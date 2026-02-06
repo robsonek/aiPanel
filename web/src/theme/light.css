@@ -1,0 +1,13 @@
+html[data-theme='light'] {
+  color-scheme: light;
+  --bg-canvas: #f6f8fb;
+  --bg-surface: #ffffff;
+  --text-primary: #111827;
+  --text-secondary: #4b5563;
+  --border-subtle: #d1d5db;
+  --accent-primary: #0f67d8;
+  --state-success: #16a34a;
+  --state-warning: #d97706;
+  --state-danger: #dc2626;
+  --focus-ring: #2563eb;
+}

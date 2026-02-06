@@ -58,6 +58,27 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+CREATE TABLE IF NOT EXISTS sites (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  domain TEXT NOT NULL UNIQUE,
+  root_dir TEXT NOT NULL,
+  php_version TEXT NOT NULL DEFAULT '8.3',
+  system_user TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sites_domain ON sites(domain);
+CREATE TABLE IF NOT EXISTS site_databases (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  site_id INTEGER NOT NULL,
+  db_name TEXT NOT NULL UNIQUE,
+  db_user TEXT NOT NULL,
+  db_engine TEXT NOT NULL DEFAULT 'mariadb',
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY(site_id) REFERENCES sites(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_site_databases_site_id ON site_databases(site_id);
 `
 	if err := s.exec(ctx, s.PanelDB, panelSchema); err != nil {
 		return fmt.Errorf("apply panel schema: %w", err)

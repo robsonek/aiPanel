@@ -1,0 +1,16 @@
+[{{ .PoolName }}]
+user = {{ .SystemUser }}
+group = {{ .SystemUser }}
+
+listen = {{ .SocketPath }}
+listen.owner = www-data
+listen.group = www-data
+listen.mode = 0660
+
+pm = ondemand
+pm.max_children = 20
+pm.process_idle_timeout = 10s
+pm.max_requests = 500
+
+chdir = /
+php_admin_value[open_basedir] = {{ .RootDir }}:/tmp

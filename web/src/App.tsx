@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
+import { useTranslation } from 'react-i18next'
+import { DatabasesPage } from './features/databases/DatabasesPage'
+import { SitesPage } from './features/sites/SitesPage'
+import './i18n'
 
 type Theme = 'light' | 'dark'
+type Page = 'dashboard' | 'sites' | 'databases' | 'updates' | 'backup' | 'security' | 'settings'
 
 type User = {
   id: number
@@ -10,17 +15,19 @@ type User = {
 }
 
 const navItems = [
-  'Dashboard',
-  'Sites & Domains',
-  'Databases',
-  'Updates & Versions',
-  'Backup & Restore',
-  'Security & Audit',
-  'Settings',
-]
+  { page: 'dashboard', labelKey: 'nav.dashboard' },
+  { page: 'sites', labelKey: 'nav.sites' },
+  { page: 'databases', labelKey: 'nav.databases' },
+  { page: 'updates', labelKey: 'nav.updates' },
+  { page: 'backup', labelKey: 'nav.backup' },
+  { page: 'security', labelKey: 'nav.security' },
+  { page: 'settings', labelKey: 'nav.settings' },
+] as const
 
 function App() {
+  const { t } = useTranslation()
   const [theme, setTheme] = useState<Theme>('light')
+  const [activePage, setActivePage] = useState<Page>('dashboard')
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [user, setUser] = useState<User | null>(null)
   const [email, setEmail] = useState('')
@@ -74,20 +81,60 @@ function App() {
     void loadSession()
   }, [])
 
-  const hostStatus = useMemo(() => (user ? 'Host: OK' : 'Host: --'), [user])
+  const hostStatus = useMemo(
+    () => (user ? t('topbar.hostOk') : t('topbar.hostUnknown')),
+    [t, user],
+  )
 
   const toggleTheme = () => setTheme((prev) => (prev === 'light' ? 'dark' : 'light'))
+
+  const pageContent = useMemo(() => {
+    if (activePage === 'sites') {
+      return <SitesPage />
+    }
+    if (activePage === 'databases') {
+      return <DatabasesPage />
+    }
+    if (activePage === 'dashboard') {
+      return (
+        <section className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-6">
+          <h2 className="font-heading text-xl">{t('dashboard.title')}</h2>
+          <p className="mt-2 text-[var(--text-secondary)]">{t('dashboard.welcome', { user: user?.email })}</p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <article className="rounded-lg border border-[var(--border-subtle)] p-4">
+              <h3 className="text-sm text-[var(--text-secondary)]">{t('dashboard.cards.cpu')}</h3>
+              <p className="mt-1 font-semibold">43%</p>
+            </article>
+            <article className="rounded-lg border border-[var(--border-subtle)] p-4">
+              <h3 className="text-sm text-[var(--text-secondary)]">{t('dashboard.cards.ram')}</h3>
+              <p className="mt-1 font-semibold">61%</p>
+            </article>
+            <article className="rounded-lg border border-[var(--border-subtle)] p-4">
+              <h3 className="text-sm text-[var(--text-secondary)]">{t('dashboard.cards.health')}</h3>
+              <p className="mt-1 font-semibold">92/100</p>
+            </article>
+          </div>
+        </section>
+      )
+    }
+    return (
+      <section className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-6">
+        <h2 className="font-heading text-xl">{t(`nav.${activePage}`)}</h2>
+        <p className="mt-2 text-sm text-[var(--text-secondary)]">{t('app.comingSoon')}</p>
+      </section>
+    )
+  }, [activePage, t, user?.email])
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault()
     setAuthError(null)
 
     if (!email.includes('@')) {
-      setAuthError('Please enter a valid email address.')
+      setAuthError(t('auth.validation.emailInvalid'))
       return
     }
     if (password.length < 10) {
-      setAuthError('Password must be at least 10 characters.')
+      setAuthError(t('auth.validation.passwordShort'))
       return
     }
 
@@ -100,14 +147,14 @@ function App() {
         body: JSON.stringify({ email, password }),
       })
       if (!res.ok) {
-        setAuthError('Invalid email or password.')
+        setAuthError(t('errors.invalidCredentials'))
         return
       }
       const payload = (await res.json()) as { user: User }
       setUser(payload.user)
       setPassword('')
     } catch {
-      setAuthError('Network error. Please try again.')
+      setAuthError(t('errors.network'))
     } finally {
       setIsSubmitting(false)
     }
@@ -125,7 +172,7 @@ function App() {
   if (loadingSession) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[var(--bg-canvas)] text-[var(--text-primary)]">
-        Loading...
+        {t('app.loading')}
       </div>
     )
   }
@@ -134,27 +181,27 @@ function App() {
     return (
       <main className="flex min-h-screen items-center justify-center bg-[var(--bg-canvas)] p-6 text-[var(--text-primary)]">
         <section className="w-full max-w-md rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-6 shadow-sm">
-          <h1 className="font-heading text-2xl">aiPanel</h1>
-          <p className="mt-1 text-sm text-[var(--text-secondary)]">Sign in to continue.</p>
+          <h1 className="font-heading text-2xl">{t('app.name')}</h1>
+          <p className="mt-1 text-sm text-[var(--text-secondary)]">{t('auth.subtitle')}</p>
           <form className="mt-6 space-y-4" onSubmit={onSubmit}>
             <label className="block">
-              <span className="mb-1 block text-sm">Email</span>
+              <span className="mb-1 block text-sm">{t('auth.email')}</span>
               <input
                 className="w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-3 py-2 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="admin@example.com"
+                placeholder={t('auth.placeholders.email')}
               />
             </label>
             <label className="block">
-              <span className="mb-1 block text-sm">Password</span>
+              <span className="mb-1 block text-sm">{t('auth.password')}</span>
               <input
                 className="w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-3 py-2 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••••"
+                placeholder={t('auth.placeholders.password')}
               />
             </label>
             {authError ? (
@@ -167,7 +214,7 @@ function App() {
               type="submit"
               disabled={isSubmitting}
             >
-              {isSubmitting ? 'Signing in...' : 'Sign in'}
+              {isSubmitting ? t('auth.signingIn') : t('auth.signIn')}
             </button>
           </form>
         </section>
@@ -184,9 +231,20 @@ function App() {
             className="rounded-md border border-[var(--border-subtle)] px-2 py-1 text-sm md:hidden"
             onClick={() => setMobileNavOpen((v) => !v)}
           >
-            Menu
+            {t('topbar.menu')}
           </button>
-          <span className="font-heading text-lg">aiPanel</span>
+          <span className="font-heading text-lg">{t('app.name')}</span>
+        </div>
+        <div className="hidden flex-1 justify-center px-4 md:flex">
+          <label htmlFor="topbar-search" className="sr-only">
+            {t('topbar.searchLabel')}
+          </label>
+          <input
+            id="topbar-search"
+            type="search"
+            placeholder={t('topbar.searchPlaceholder')}
+            className="w-full max-w-xl rounded-md border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
+          />
         </div>
         <div className="hidden items-center gap-3 text-sm text-[var(--text-secondary)] md:flex">
           <span>{hostStatus}</span>
@@ -195,7 +253,7 @@ function App() {
             className="rounded-md border border-[var(--border-subtle)] px-2 py-1 hover:bg-[var(--bg-canvas)]"
             onClick={toggleTheme}
           >
-            {theme === 'light' ? 'Dark' : 'Light'}
+            {theme === 'light' ? t('theme.dark') : t('theme.light')}
           </button>
           <span>{user.email}</span>
           <button
@@ -203,7 +261,7 @@ function App() {
             className="rounded-md border border-[var(--border-subtle)] px-2 py-1 hover:bg-[var(--bg-canvas)]"
             onClick={logout}
           >
-            Logout
+            {t('auth.logout')}
           </button>
         </div>
       </header>
@@ -218,12 +276,18 @@ function App() {
           <nav className="space-y-1">
             {navItems.map((item) => (
               <button
-                key={item}
+                key={item.page}
                 type="button"
-                className="block w-full rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--bg-canvas)]"
-                onClick={() => setMobileNavOpen(false)}
+                className={[
+                  'block w-full rounded-md px-3 py-2 text-left text-sm hover:bg-[var(--bg-canvas)]',
+                  activePage === item.page ? 'bg-[var(--bg-canvas)]' : '',
+                ].join(' ')}
+                onClick={() => {
+                  setActivePage(item.page)
+                  setMobileNavOpen(false)
+                }}
               >
-                {item}
+                {t(item.labelKey)}
               </button>
             ))}
           </nav>
@@ -233,38 +297,21 @@ function App() {
               className="mb-2 block w-full rounded-md border border-[var(--border-subtle)] px-3 py-2 text-left text-sm"
               onClick={toggleTheme}
             >
-              Theme: {theme}
+              {t('topbar.themeCurrent', {
+                theme: t(theme === 'light' ? 'theme.light' : 'theme.dark'),
+              })}
             </button>
             <button
               type="button"
               className="block w-full rounded-md border border-[var(--border-subtle)] px-3 py-2 text-left text-sm"
               onClick={logout}
             >
-              Logout
+              {t('auth.logout')}
             </button>
           </div>
         </aside>
 
-        <main className="w-full p-4 md:p-6">
-          <section className="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-surface)] p-6">
-            <h2 className="font-heading text-xl">Dashboard</h2>
-            <p className="mt-2 text-[var(--text-secondary)]">Welcome, {user.email}</p>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              <article className="rounded-lg border border-[var(--border-subtle)] p-4">
-                <h3 className="text-sm text-[var(--text-secondary)]">CPU</h3>
-                <p className="mt-1 font-semibold">43%</p>
-              </article>
-              <article className="rounded-lg border border-[var(--border-subtle)] p-4">
-                <h3 className="text-sm text-[var(--text-secondary)]">RAM</h3>
-                <p className="mt-1 font-semibold">61%</p>
-              </article>
-              <article className="rounded-lg border border-[var(--border-subtle)] p-4">
-                <h3 className="text-sm text-[var(--text-secondary)]">Health score</h3>
-                <p className="mt-1 font-semibold">92/100</p>
-              </article>
-            </div>
-          </section>
-        </main>
+        <main className="w-full p-4 md:p-6">{pageContent}</main>
       </div>
     </div>
   )

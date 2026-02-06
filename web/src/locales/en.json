@@ -1,10 +1,51 @@
 {
-  "appName": "aiPanel",
+  "app": {
+    "name": "aiPanel",
+    "loading": "Loading...",
+    "comingSoon": "This module will be available in the next sprint."
+  },
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "confirm": "Confirm",
+    "create": "Create",
+    "edit": "Edit",
+    "update": "Update",
+    "search": "Search",
+    "filter": "Filter",
+    "refresh": "Refresh",
+    "close": "Close",
+    "open": "Open",
+    "back": "Back",
+    "next": "Next",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "yes": "Yes",
+    "no": "No",
+    "status": "Status",
+    "actions": "Actions",
+    "none": "None"
+  },
   "auth": {
+    "subtitle": "Sign in to continue.",
+    "signingIn": "Signing in...",
     "signIn": "Sign in",
     "email": "Email",
     "password": "Password",
-    "logout": "Logout"
+    "logout": "Logout",
+    "placeholders": {
+      "email": "admin@example.com",
+      "password": "••••••••••"
+    },
+    "validation": {
+      "emailInvalid": "Please enter a valid email address.",
+      "passwordShort": "Password must be at least 10 characters."
+    }
+  },
+  "errors": {
+    "invalidCredentials": "Invalid email or password.",
+    "network": "Network error. Please try again."
   },
   "nav": {
     "dashboard": "Dashboard",
@@ -14,5 +55,87 @@
     "backup": "Backup & Restore",
     "security": "Security & Audit",
     "settings": "Settings"
+  },
+  "topbar": {
+    "menu": "Menu",
+    "searchLabel": "Search",
+    "searchPlaceholder": "Search sites, databases, backups...",
+    "hostOk": "Host: OK",
+    "hostUnknown": "Host: --",
+    "themeCurrent": "Theme: {{theme}}"
+  },
+  "theme": {
+    "light": "Light",
+    "dark": "Dark"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "welcome": "Welcome, {{user}}",
+    "cards": {
+      "cpu": "CPU",
+      "ram": "RAM",
+      "health": "Health score"
+    }
+  },
+  "sites": {
+    "title": "Sites & Domains",
+    "count": "{{count}} sites",
+    "empty": "No sites yet. Create your first website.",
+    "table": {
+      "domain": "Domain",
+      "phpVersion": "PHP Version",
+      "status": "Status",
+      "created": "Created",
+      "actions": "Actions"
+    },
+    "create": {
+      "title": "Create Site",
+      "domainLabel": "Domain",
+      "domainPlaceholder": "test.example.com",
+      "phpVersionLabel": "PHP Version",
+      "submit": "Create Site",
+      "submitting": "Creating site..."
+    },
+    "delete": {
+      "confirm": "Delete site {{domain}}?"
+    },
+    "errors": {
+      "loadFailed": "Failed to load sites.",
+      "createFailed": "Failed to create site.",
+      "deleteFailed": "Failed to delete site."
+    }
+  },
+  "databases": {
+    "title": "Databases",
+    "noSites": "Create a site first to add databases.",
+    "empty": "No databases for selected site.",
+    "passwordOnce": "Database password (shown once): {{password}}",
+    "table": {
+      "name": "Database",
+      "user": "User",
+      "engine": "Engine",
+      "site": "Site",
+      "created": "Created",
+      "actions": "Actions"
+    },
+    "create": {
+      "title": "Create Database",
+      "siteLabel": "Site",
+      "sitePlaceholder": "Select site",
+      "dbNameLabel": "Database Name",
+      "dbNamePlaceholder": "app_db",
+      "submit": "Create Database",
+      "submitting": "Creating database..."
+    },
+    "delete": {
+      "confirm": "Delete database {{name}}?"
+    },
+    "errors": {
+      "siteRequired": "Please select a site.",
+      "loadSitesFailed": "Failed to load sites list.",
+      "loadFailed": "Failed to load databases.",
+      "createFailed": "Failed to create database.",
+      "deleteFailed": "Failed to delete database."
+    }
   }
 }

@@ -1,0 +1,98 @@
+package database
+
+import (
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+)
+
+// Handler exposes HTTP handlers for database CRUD.
+type Handler struct {
+	svc *Service
+}
+
+// NewHandler creates database HTTP handler.
+func NewHandler(svc *Service) *Handler {
+	return &Handler{svc: svc}
+}
+
+// HandleSiteDatabases serves POST/GET /api/sites/{siteID}/databases.
+func (h *Handler) HandleSiteDatabases(w http.ResponseWriter, r *http.Request, siteID int64, actor string) {
+	switch r.Method {
+	case http.MethodGet:
+		dbs, err := h.svc.ListDatabases(r.Context(), siteID)
+		if err != nil {
+			http.Error(w, "failed to list databases", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"databases": dbs})
+	case http.MethodPost:
+		var payload struct {
+			DBName string `json:"db_name"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&payload); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		res, err := h.svc.CreateDatabase(r.Context(), CreateDatabaseRequest{
+			SiteID: siteID,
+			DBName: payload.DBName,
+			Actor:  actor,
+		})
+		if err != nil {
+			if strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "not found") {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			http.Error(w, "failed to create database", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusCreated, res)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// HandleDatabaseByID serves DELETE /api/databases/{id}.
+func (h *Handler) HandleDatabaseByID(w http.ResponseWriter, r *http.Request, id int64, actor string) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := h.svc.DeleteDatabase(r.Context(), id, actor); err != nil {
+		if errors.Is(err, ErrDatabaseNotFound) {
+			http.Error(w, "database not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "failed to delete database", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ParseSiteIDFromDatabasesPath extracts site ID from "/api/sites/{siteID}/databases".
+func ParseSiteIDFromDatabasesPath(path string) (int64, error) {
+	trimmed := strings.TrimPrefix(path, "/api/sites/")
+	trimmed = strings.TrimSpace(strings.Trim(trimmed, "/"))
+	parts := strings.Split(trimmed, "/")
+	if len(parts) < 2 {
+		return 0, strconv.ErrSyntax
+	}
+	return strconv.ParseInt(parts[0], 10, 64)
+}
+
+// ParseDatabaseID extracts id from "/api/databases/{id}".
+func ParseDatabaseID(path string) (int64, error) {
+	trimmed := strings.TrimPrefix(path, "/api/databases/")
+	trimmed = strings.TrimSpace(strings.Trim(trimmed, "/"))
+	return strconv.ParseInt(trimmed, 10, 64)
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}

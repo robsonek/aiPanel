@@ -90,6 +90,13 @@ func TestInstallerRun_Phase1DrySystem(t *testing.T) {
 	opts.MemInfoPath = memInfo
 	opts.Proc1ExePath = proc1
 	opts.RootFSPath = root
+	opts.NginxSitesAvailableDir = filepath.Join(root, "etc", "nginx", "sites-available")
+	opts.NginxSitesEnabledDir = filepath.Join(root, "etc", "nginx", "sites-enabled")
+	opts.PHPBaseDir = filepath.Join(root, "etc", "php")
+	opts.PanelVhostTemplatePath = filepath.Join(root, "configs", "templates", "nginx_panel_vhost.conf.tmpl")
+	opts.CatchAllTemplatePath = filepath.Join(root, "configs", "templates", "nginx_catchall.conf.tmpl")
+	opts.AdminEmail = "admin@example.com"
+	opts.AdminPassword = "supersecret123"
 	opts.SkipHealthcheck = true
 	opts.MinCPU = 1
 
@@ -122,6 +129,9 @@ func TestInstallerRun_Phase1DrySystem(t *testing.T) {
 	}
 	if !strings.Contains(joined, "apt-get update") {
 		t.Fatalf("expected apt-get update command, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "apt-get upgrade -y") {
+		t.Fatalf("expected apt-get upgrade command, got:\n%s", joined)
 	}
 	if !strings.Contains(joined, "systemctl enable --now aipanel") {
 		t.Fatalf("expected systemd enable command for aipanel, got:\n%s", joined)

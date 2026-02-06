@@ -1,36 +1,6 @@
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
 @import "tailwindcss";
-
-:root {
-  --bg-canvas: #f6f8fb;
-  --bg-surface: #ffffff;
-  --text-primary: #111827;
-  --text-secondary: #4b5563;
-  --border-subtle: #d1d5db;
-  --accent-primary: #0f67d8;
-  --state-success: #16a34a;
-  --state-warning: #d97706;
-  --state-danger: #dc2626;
-  --focus-ring: #2563eb;
-}
-
-html[data-theme='dark'] {
-  --bg-canvas: #0b1324;
-  --bg-surface: #111d33;
-  --text-primary: #e5e7eb;
-  --text-secondary: #9ca3af;
-  --border-subtle: #334155;
-  --accent-primary: #1d9bf0;
-  --state-success: #22c55e;
-  --state-warning: #f59e0b;
-  --state-danger: #f87171;
-  --focus-ring: #38bdf8;
-}
-
-body {
-  font-family: 'IBM Plex Sans', sans-serif;
-}
-
-.font-heading {
-  font-family: 'Space Grotesk', sans-serif;
-}
+@import './theme/fonts.css';
+@import './theme/tokens.css';
+@import './theme/light.css';
+@import './theme/dark.css';

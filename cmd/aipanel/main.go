@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/robsonek/aiPanel/internal/installer"
+	"github.com/robsonek/aiPanel/internal/modules/database"
+	"github.com/robsonek/aiPanel/internal/modules/hosting"
 	"github.com/robsonek/aiPanel/internal/modules/iam"
 	"github.com/robsonek/aiPanel/internal/platform/config"
 	"github.com/robsonek/aiPanel/internal/platform/httpserver"
@@ -19,8 +21,14 @@ import (
 	"github.com/robsonek/aiPanel/internal/platform/systemd"
 )
 
-func newHandler(cfg config.Config, log *slog.Logger, iamSvc *iam.Service) http.Handler {
-	return httpserver.NewHandler(cfg, log, iamSvc)
+func newHandler(
+	cfg config.Config,
+	log *slog.Logger,
+	iamSvc *iam.Service,
+	hostingSvc *hosting.Service,
+	databaseSvc *database.Service,
+) http.Handler {
+	return httpserver.NewHandler(cfg, log, iamSvc, hostingSvc, databaseSvc)
 }
 
 func main() {
@@ -59,12 +67,18 @@ func runServer() {
 		panic(fmt.Errorf("init sqlite: %w", err))
 	}
 	iamSvc := iam.NewService(store, cfg, log)
+	runner := systemd.ExecRunner{}
+	nginxAdapter := hosting.NewNginxAdapter(runner, hosting.NginxAdapterOptions{})
+	phpfpmAdapter := hosting.NewPHPFPMAdapter(runner, hosting.PHPFPMAdapterOptions{})
+	hostingSvc := hosting.NewService(store, cfg, log, runner, nginxAdapter, phpfpmAdapter)
+	mariadbAdapter := database.NewMariaDBAdapter(runner)
+	databaseSvc := database.NewService(store, cfg, log, mariadbAdapter)
 
 	log.Info("aiPanel starting", "addr", cfg.Addr, "env", cfg.Env, "config_path", cfgPath, "data_dir", cfg.DataDir)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           newHandler(cfg, log, iamSvc),
+		Handler:           newHandler(cfg, log, iamSvc, hostingSvc, databaseSvc),
 		ReadTimeout:       15 * time.Second,
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -125,6 +139,8 @@ func runInstall(args []string) {
 	stateFile := fs.String("state-file", defaults.StateFilePath, "installer checkpoint state path")
 	reportFile := fs.String("report-file", defaults.ReportFilePath, "installer report path")
 	logFile := fs.String("log-file", defaults.LogFilePath, "installer log path")
+	adminEmail := fs.String("admin-email", defaults.AdminEmail, "initial admin email")
+	adminPassword := fs.String("admin-password", defaults.AdminPassword, "initial admin password")
 	skipHealthcheck := fs.Bool("skip-healthcheck", false, "skip final /health check")
 	dryRun := fs.Bool("dry-run", false, "do not execute system commands")
 	_ = fs.Parse(args)
@@ -140,6 +156,8 @@ func runInstall(args []string) {
 	opts.StateFilePath = strings.TrimSpace(*stateFile)
 	opts.ReportFilePath = strings.TrimSpace(*reportFile)
 	opts.LogFilePath = strings.TrimSpace(*logFile)
+	opts.AdminEmail = strings.TrimSpace(*adminEmail)
+	opts.AdminPassword = strings.TrimSpace(*adminPassword)
 	opts.SkipHealthcheck = *skipHealthcheck
 
 	runner := systemd.ExecRunner{DryRun: *dryRun}
