@@ -35,8 +35,16 @@ func main() {
 	runServer()
 }
 
+func resolveConfigPath() string {
+	if p := strings.TrimSpace(os.Getenv("AIPANEL_CONFIG")); p != "" {
+		return p
+	}
+	return "configs/defaults/panel.yaml"
+}
+
 func runServer() {
-	cfg, err := config.Load("configs/defaults/panel.yaml")
+	cfgPath := resolveConfigPath()
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		panic(fmt.Errorf("load config: %w", err))
 	}
@@ -47,7 +55,7 @@ func runServer() {
 	}
 	iamSvc := iam.NewService(store, cfg, log)
 
-	log.Info("aiPanel starting", "addr", cfg.Addr, "env", cfg.Env)
+	log.Info("aiPanel starting", "addr", cfg.Addr, "env", cfg.Env, "config_path", cfgPath, "data_dir", cfg.DataDir)
 
 	srv := &http.Server{
 		Addr:         cfg.Addr,
@@ -78,7 +86,8 @@ func runAdmin(args []string) {
 		os.Exit(2)
 	}
 
-	cfg, err := config.Load("configs/defaults/panel.yaml")
+	cfgPath := resolveConfigPath()
+	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
 		os.Exit(1)

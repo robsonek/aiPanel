@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +38,9 @@ func Load(path string) (Config, error) {
 		}
 	}
 	mergeFromEnv(&cfg)
+	if err := normalizeDataDir(&cfg, path); err != nil {
+		return Config{}, err
+	}
 
 	if cfg.Addr == "" {
 		return Config{}, fmt.Errorf("addr cannot be empty")
@@ -48,6 +52,26 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("session_ttl_hours must be > 0")
 	}
 	return cfg, nil
+}
+
+func normalizeDataDir(cfg *Config, configPath string) error {
+	if cfg.DataDir == "" {
+		return nil
+	}
+	if filepath.IsAbs(cfg.DataDir) {
+		return nil
+	}
+
+	baseDir := "."
+	if strings.TrimSpace(configPath) != "" {
+		baseDir = filepath.Dir(configPath)
+	}
+	absBaseDir, err := filepath.Abs(baseDir)
+	if err != nil {
+		return fmt.Errorf("resolve config directory: %w", err)
+	}
+	cfg.DataDir = filepath.Clean(filepath.Join(absBaseDir, cfg.DataDir))
+	return nil
 }
 
 func mergeFromFile(cfg *Config, path string) error {

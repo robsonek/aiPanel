@@ -26,7 +26,10 @@ func NewHandler(cfg config.Config, log *slog.Logger, iamSvc *iam.Service) http.H
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	mux.HandleFunc("/api/auth/login", func(w http.ResponseWriter, r *http.Request) {
+	secureCookie := !strings.EqualFold(cfg.Env, "dev") && !strings.EqualFold(cfg.Env, "test")
+
+	protected := http.NewServeMux()
+	protected.HandleFunc("/api/auth/login", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -50,8 +53,8 @@ func NewHandler(cfg config.Config, log *slog.Logger, iamSvc *iam.Service) http.H
 			Value:    session.Token,
 			Path:     "/",
 			HttpOnly: true,
-			Secure:   true,
-			SameSite: http.SameSiteStrictMode,
+			Secure:   secureCookie,
+			SameSite: http.SameSiteLaxMode,
 			Expires:  session.ExpiresAt,
 		})
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -62,8 +65,6 @@ func NewHandler(cfg config.Config, log *slog.Logger, iamSvc *iam.Service) http.H
 			},
 		})
 	})
-
-	protected := http.NewServeMux()
 	protected.HandleFunc("/api/auth/logout", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -79,8 +80,8 @@ func NewHandler(cfg config.Config, log *slog.Logger, iamSvc *iam.Service) http.H
 			Value:    "",
 			Path:     "/",
 			HttpOnly: true,
-			Secure:   true,
-			SameSite: http.SameSiteStrictMode,
+			Secure:   secureCookie,
+			SameSite: http.SameSiteLaxMode,
 			MaxAge:   -1,
 		})
 		w.WriteHeader(http.StatusNoContent)

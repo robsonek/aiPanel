@@ -35,7 +35,8 @@ session_ttl_hours: 12
 	if cfg.Env != "prod" {
 		t.Fatalf("expected env from env var, got %q", cfg.Env)
 	}
-	if cfg.DataDir != "./test-data" {
+	wantDataDir := filepath.Join(dir, "test-data")
+	if cfg.DataDir != wantDataDir {
 		t.Fatalf("expected data_dir from file, got %q", cfg.DataDir)
 	}
 	if cfg.SessionCookieName != "test_cookie" {
