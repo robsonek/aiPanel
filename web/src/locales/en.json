@@ -1,0 +1,18 @@
+{
+  "appName": "aiPanel",
+  "auth": {
+    "signIn": "Sign in",
+    "email": "Email",
+    "password": "Password",
+    "logout": "Logout"
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "sites": "Sites & Domains",
+    "databases": "Databases",
+    "updates": "Updates & Versions",
+    "backup": "Backup & Restore",
+    "security": "Security & Audit",
+    "settings": "Settings"
+  }
+}

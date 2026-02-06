@@ -1,9 +1,11 @@
 .PHONY: build dev test test-fe lint clean
 
+GO_ENV := GOMODCACHE=$(CURDIR)/.cache/gomod GOCACHE=$(CURDIR)/.cache/gobuild
+
 ## Build production binary (frontend + Go)
 build:
 	cd web && pnpm build
-	CGO_ENABLED=0 go build -o bin/aipanel ./cmd/aipanel
+	$(GO_ENV) CGO_ENABLED=0 go build -o bin/aipanel ./cmd/aipanel
 
 ## Start development environment (backend + Vite dev server)
 dev:
@@ -11,7 +13,7 @@ dev:
 
 ## Run Go tests
 test:
-	go test ./...
+	$(GO_ENV) go test ./...
 
 ## Run frontend tests
 test-fe:
@@ -19,7 +21,7 @@ test-fe:
 
 ## Run linters (Go + frontend)
 lint:
-	golangci-lint run ./...
+	$(GO_ENV) golangci-lint run ./...
 	cd web && pnpm lint
 
 ## Remove build artifacts

@@ -1,0 +1,6 @@
+addr: ":8080"
+env: "dev"
+data_dir: "./data"
+dev_frontend_proxy: "http://localhost:5173"
+session_cookie_name: "aipanel_session"
+session_ttl_hours: 24

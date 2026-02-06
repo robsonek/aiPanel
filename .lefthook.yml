@@ -6,7 +6,7 @@ pre-commit:
       run: gofmt -l -d {staged_files} && test -z "$(gofmt -l {staged_files})"
     golangci-lint:
       glob: "*.go"
-      run: golangci-lint run --new-from-rev=HEAD~1 ./...
+      run: GOMODCACHE="$(pwd)/.cache/gomod" GOCACHE="$(pwd)/.cache/gobuild" golangci-lint run ./...
     eslint:
       root: "web/"
       glob: "*.{ts,tsx}"

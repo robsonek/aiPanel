@@ -1,8 +1,14 @@
 import { render, screen } from '@testing-library/react'
-import { expect, test } from 'vitest'
+import { afterEach, expect, test, vi } from 'vitest'
 import App from './App'
 
-test('renders aiPanel heading', () => {
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+test('renders login screen by default', async () => {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: false })
+  vi.stubGlobal('fetch', fetchMock)
   render(<App />)
-  expect(screen.getByText('aiPanel')).toBeDefined()
+  expect(await screen.findByText('Sign in to continue.')).toBeDefined()
 })
