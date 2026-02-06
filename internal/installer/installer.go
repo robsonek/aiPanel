@@ -583,6 +583,12 @@ func (i *Installer) configureNginx(ctx context.Context) error {
 		return fmt.Errorf("write catchall vhost: %w", err)
 	}
 
+	// Remove default nginx site to avoid duplicate default_server conflict.
+	defaultLink := filepath.Join(enableDir, "default")
+	if err := os.Remove(defaultLink); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove default nginx site: %w", err)
+	}
+
 	panelLink := filepath.Join(enableDir, "aipanel.conf")
 	catchallLink := filepath.Join(enableDir, "aipanel-catchall.conf")
 	if err := os.Remove(panelLink); err != nil && !os.IsNotExist(err) {
@@ -611,7 +617,8 @@ func (i *Installer) configurePHPFPM(ctx context.Context) error {
 	versions := []string{"8.3", "8.4"}
 	for _, version := range versions {
 		path := filepath.Join(i.opts.PHPBaseDir, version, "fpm", "pool.d", "aipanel-default.conf")
-		if err := writeTextFile(path, defaultPHPPoolTemplate, 0o644); err != nil {
+		content := fmt.Sprintf(phpPoolTemplate, version, version)
+		if err := writeTextFile(path, content, 0o644); err != nil {
 			return fmt.Errorf("write php-fpm default pool for %s: %w", version, err)
 		}
 		if _, err := i.runner.Run(ctx, "systemctl", "restart", "php"+version+"-fpm"); err != nil {
@@ -951,10 +958,11 @@ const defaultCatchallTemplate = `server {
 }
 `
 
-const defaultPHPPoolTemplate = `[aipanel-default]
+// phpPoolTemplate uses two %s verb slots: PHP version for pool name and socket path.
+const phpPoolTemplate = `[aipanel-default-%s]
 user = www-data
 group = www-data
-listen = /run/php/aipanel-default.sock
+listen = /run/php/aipanel-default-%s.sock
 listen.owner = www-data
 listen.group = www-data
 listen.mode = 0660
@@ -985,8 +993,10 @@ func renderSystemdUnit(opts Options) string {
 		"",
 		"[Service]",
 		"Type=simple",
-		"User=aipanel",
-		"Group=aipanel",
+		// Hosting provisioning requires privileged operations:
+		// useradd/chown, writes under /etc and /var/www, and service reloads.
+		"User=root",
+		"Group=root",
 		"WorkingDirectory=/",
 		fmt.Sprintf("Environment=AIPANEL_CONFIG=%s", configPath),
 		fmt.Sprintf("ExecStart=%s serve", opts.PanelBinaryPath),

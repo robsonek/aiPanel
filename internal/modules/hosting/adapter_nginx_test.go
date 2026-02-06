@@ -59,6 +59,41 @@ func TestNginxAdapter_WriteVhostAndSymlink(t *testing.T) {
 	}
 }
 
+func TestNginxAdapter_WriteVhostWithFallbackTemplate(t *testing.T) {
+	root := t.TempDir()
+	availDir := filepath.Join(root, "sites-available")
+	enabledDir := filepath.Join(root, "sites-enabled")
+	ad := NewNginxAdapter(&fakeRunner{}, NginxAdapterOptions{
+		TemplatePath:      filepath.Join(root, "missing-template.tmpl"),
+		SitesAvailableDir: availDir,
+		SitesEnabledDir:   enabledDir,
+	})
+
+	site := adapter.SiteConfig{
+		Domain:     "test.example.com",
+		RootDir:    "/var/www/test.example.com/public_html",
+		PHPVersion: "8.3",
+		SystemUser: "site_test_example_com",
+	}
+	if err := ad.WriteVhost(context.Background(), site); err != nil {
+		t.Fatalf("write vhost with fallback template: %v", err)
+	}
+
+	confPath := filepath.Join(availDir, "test.example.com.conf")
+	//nolint:gosec // test reads a file created within temp dir.
+	b, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Fatalf("read vhost: %v", err)
+	}
+	content := string(b)
+	if !strings.Contains(content, "server_name test.example.com;") {
+		t.Fatalf("expected fallback template domain output, got %q", content)
+	}
+	if !strings.Contains(content, "fastcgi_pass unix:/run/php/test-example-com-php83.sock;") {
+		t.Fatalf("expected fallback template socket output, got %q", content)
+	}
+}
+
 func TestNginxAdapter_RemoveVhost(t *testing.T) {
 	root := t.TempDir()
 	availDir := filepath.Join(root, "sites-available")

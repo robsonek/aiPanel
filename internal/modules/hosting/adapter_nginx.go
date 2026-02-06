@@ -16,6 +16,26 @@ const (
 	defaultNginxVhostTemplate  = "configs/templates/nginx_vhost.conf.tmpl"
 	defaultNginxSitesAvailDir  = "/etc/nginx/sites-available"
 	defaultNginxSitesEnableDir = "/etc/nginx/sites-enabled"
+	defaultNginxVhostBody      = `server {
+    listen 80;
+    server_name {{ .Domain }};
+
+    root {{ .RootDir }};
+    index index.php index.html index.htm;
+
+    access_log /var/log/nginx/{{ .Domain }}.access.log;
+    error_log /var/log/nginx/{{ .Domain }}.error.log;
+
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:{{ .SocketPath }};
+    }
+}
+`
 )
 
 // NginxAdapterOptions controls filesystem locations used by the adapter.
@@ -72,7 +92,7 @@ func (a *NginxAdapter) WriteVhost(_ context.Context, site adapter.SiteConfig) er
 		"SocketPath": socketPath(domain, site.PHPVersion),
 	}
 
-	content, err := renderTemplateFile(a.templatePath, model)
+	content, err := renderTemplateFileWithFallback(a.templatePath, defaultNginxVhostBody, model)
 	if err != nil {
 		return fmt.Errorf("render nginx vhost template: %w", err)
 	}
@@ -131,8 +151,15 @@ func (a *NginxAdapter) Reload(ctx context.Context) error {
 	return nil
 }
 
-func renderTemplateFile(path string, data any) (string, error) {
-	tpl, err := template.ParseFiles(path)
+func renderTemplateFileWithFallback(path, fallback string, data any) (string, error) {
+	source, err := os.ReadFile(path) //nolint:gosec // Adapter reads installer-controlled template paths.
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		source = []byte(fallback)
+	}
+	tpl, err := template.New(filepath.Base(path)).Parse(string(source))
 	if err != nil {
 		return "", err
 	}

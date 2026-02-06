@@ -29,7 +29,6 @@ func NewHandler(
 	databaseSvc *database.Service,
 ) http.Handler {
 	mux := http.NewServeMux()
-	secureCookie := !strings.EqualFold(cfg.Env, "dev") && !strings.EqualFold(cfg.Env, "test")
 	hostingHandler := hosting.NewHandler(hostingSvc)
 	databaseHandler := database.NewHandler(databaseSvc)
 
@@ -61,7 +60,7 @@ func NewHandler(
 			Value:    session.Token,
 			Path:     "/",
 			HttpOnly: true,
-			Secure:   secureCookie,
+			Secure:   useSecureCookie(cfg.Env, r),
 			SameSite: http.SameSiteLaxMode,
 			Expires:  session.ExpiresAt,
 		})
@@ -89,7 +88,7 @@ func NewHandler(
 			Value:    "",
 			Path:     "/",
 			HttpOnly: true,
-			Secure:   secureCookie,
+			Secure:   useSecureCookie(cfg.Env, r),
 			SameSite: http.SameSiteLaxMode,
 			MaxAge:   -1,
 		})
@@ -226,6 +225,23 @@ func readSessionToken(r *http.Request, cookieName string) string {
 		return ""
 	}
 	return strings.TrimSpace(c.Value)
+}
+
+func useSecureCookie(env string, r *http.Request) bool {
+	if strings.EqualFold(env, "dev") || strings.EqualFold(env, "test") {
+		return false
+	}
+	if r != nil && r.TLS != nil {
+		return true
+	}
+	proto := ""
+	if r != nil {
+		proto = strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
+	}
+	if idx := strings.Index(proto, ","); idx >= 0 {
+		proto = strings.TrimSpace(proto[:idx])
+	}
+	return strings.EqualFold(proto, "https")
 }
 
 func frontendHandler(cfg config.Config, log *slog.Logger) http.Handler {

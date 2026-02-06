@@ -16,6 +16,23 @@ import (
 const (
 	defaultPHPFPMTemplate = "configs/templates/phpfpm_pool.conf.tmpl"
 	defaultPHPBaseDir     = "/etc/php"
+	defaultPHPFPMPoolBody = `[{{ .PoolName }}]
+user = {{ .SystemUser }}
+group = {{ .SystemUser }}
+
+listen = {{ .SocketPath }}
+listen.owner = www-data
+listen.group = www-data
+listen.mode = 0660
+
+pm = ondemand
+pm.max_children = 20
+pm.process_idle_timeout = 10s
+pm.max_requests = 500
+
+chdir = /
+php_admin_value[open_basedir] = {{ .RootDir }}:/tmp
+`
 )
 
 var phpVersionPattern = regexp.MustCompile(`^\d+\.\d+$`)
@@ -75,7 +92,7 @@ func (a *PHPFPMAdapter) WritePool(_ context.Context, site adapter.SiteConfig) er
 		"PoolName":   pool,
 		"SocketPath": socketPath(domain, site.PHPVersion),
 	}
-	content, err := renderTemplateFile(a.templatePath, model)
+	content, err := renderTemplateFileWithFallback(a.templatePath, defaultPHPFPMPoolBody, model)
 	if err != nil {
 		return fmt.Errorf("render php-fpm pool template: %w", err)
 	}

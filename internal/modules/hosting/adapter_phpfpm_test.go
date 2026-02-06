@@ -50,6 +50,37 @@ func TestPHPFPMAdapter_WritePoolAndRemovePool(t *testing.T) {
 	}
 }
 
+func TestPHPFPMAdapter_WritePoolWithFallbackTemplate(t *testing.T) {
+	root := t.TempDir()
+	ad := NewPHPFPMAdapter(&fakeRunner{}, PHPFPMAdapterOptions{
+		TemplatePath: filepath.Join(root, "missing-template.tmpl"),
+		PHPBaseDir:   root,
+	})
+	site := adapter.SiteConfig{
+		Domain:     "test.example.com",
+		RootDir:    "/var/www/test.example.com/public_html",
+		PHPVersion: "8.3",
+		SystemUser: "site_test_example_com",
+	}
+	if err := ad.WritePool(context.Background(), site); err != nil {
+		t.Fatalf("write pool with fallback template: %v", err)
+	}
+
+	path := filepath.Join(root, "8.3", "fpm", "pool.d", "test-example-com-php83.conf")
+	//nolint:gosec // test reads a file created within temp dir.
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read pool: %v", err)
+	}
+	content := string(b)
+	if !strings.Contains(content, "[test-example-com-php83]") {
+		t.Fatalf("expected fallback template pool name output, got %q", content)
+	}
+	if !strings.Contains(content, "php_admin_value[open_basedir] = /var/www/test.example.com/public_html:/tmp") {
+		t.Fatalf("expected fallback template root dir output, got %q", content)
+	}
+}
+
 func TestPHPFPMAdapter_Restart(t *testing.T) {
 	r := &fakeRunner{}
 	ad := NewPHPFPMAdapter(r, PHPFPMAdapterOptions{})

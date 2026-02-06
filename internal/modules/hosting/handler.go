@@ -38,11 +38,15 @@ func (h *Handler) HandleSites(w http.ResponseWriter, r *http.Request, actor stri
 		req.Actor = actor
 		site, err := h.svc.CreateSite(r.Context(), req)
 		if err != nil {
-			if strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "required") {
+			errMsg := strings.ToLower(err.Error())
+			if strings.Contains(errMsg, "invalid") ||
+				strings.Contains(errMsg, "required") ||
+				strings.Contains(errMsg, "not installed") ||
+				strings.Contains(errMsg, "already exists") {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
-			http.Error(w, "failed to create site", http.StatusInternalServerError)
+			http.Error(w, "failed to create site: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		writeJSON(w, http.StatusCreated, map[string]any{"site": site})
