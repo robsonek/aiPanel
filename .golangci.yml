@@ -1,0 +1,20 @@
+version: "2"
+
+linters:
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - gosec
+    - ineffassign
+    - unused
+
+linters-settings:
+  gosec:
+    excludes:
+      - G104
+
+issues:
+  exclude-dirs:
+    - web
+    - bin

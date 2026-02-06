@@ -1,0 +1,17 @@
+pre-commit:
+  parallel: true
+  commands:
+    gofmt:
+      glob: "*.go"
+      run: gofmt -l -d {staged_files} && test -z "$(gofmt -l {staged_files})"
+    golangci-lint:
+      glob: "*.go"
+      run: golangci-lint run --new-from-rev=HEAD~1 ./...
+    eslint:
+      root: "web/"
+      glob: "*.{ts,tsx}"
+      run: pnpm lint
+    prettier:
+      root: "web/"
+      glob: "*.{ts,tsx,css,json}"
+      run: pnpm prettier --check {staged_files}
