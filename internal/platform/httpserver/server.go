@@ -21,15 +21,13 @@ import (
 // NewHandler creates the root HTTP handler for panel API and frontend.
 func NewHandler(cfg config.Config, log *slog.Logger, iamSvc *iam.Service) http.Handler {
 	mux := http.NewServeMux()
+	secureCookie := !strings.EqualFold(cfg.Env, "dev") && !strings.EqualFold(cfg.Env, "test")
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	secureCookie := !strings.EqualFold(cfg.Env, "dev") && !strings.EqualFold(cfg.Env, "test")
-
-	protected := http.NewServeMux()
-	protected.HandleFunc("/api/auth/login", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/auth/login", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -65,7 +63,8 @@ func NewHandler(cfg config.Config, log *slog.Logger, iamSvc *iam.Service) http.H
 			},
 		})
 	})
-	protected.HandleFunc("/api/auth/logout", func(w http.ResponseWriter, r *http.Request) {
+
+	mux.Handle("/api/auth/logout", requireAuth(iamSvc, cfg.SessionCookieName, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -85,8 +84,9 @@ func NewHandler(cfg config.Config, log *slog.Logger, iamSvc *iam.Service) http.H
 			MaxAge:   -1,
 		})
 		w.WriteHeader(http.StatusNoContent)
-	})
-	protected.HandleFunc("/api/auth/me", func(w http.ResponseWriter, r *http.Request) {
+	})))
+
+	mux.Handle("/api/auth/me", requireAuth(iamSvc, cfg.SessionCookieName, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -97,8 +97,9 @@ func NewHandler(cfg config.Config, log *slog.Logger, iamSvc *iam.Service) http.H
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"user": u})
-	})
-	protected.HandleFunc("/api/admin/ping", func(w http.ResponseWriter, r *http.Request) {
+	})))
+
+	mux.Handle("/api/admin/ping", requireAuth(iamSvc, cfg.SessionCookieName, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -113,9 +114,7 @@ func NewHandler(cfg config.Config, log *slog.Logger, iamSvc *iam.Service) http.H
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	})
-
-	mux.Handle("/api/", authMiddleware(iamSvc, cfg.SessionCookieName, protected))
+	})))
 
 	frontend := frontendHandler(cfg, log)
 	mux.Handle("/", frontend)
@@ -133,12 +132,8 @@ type userCtxKey string
 
 const authUserKey userCtxKey = "auth_user"
 
-func authMiddleware(iamSvc *iam.Service, cookieName string, next http.Handler) http.Handler {
+func requireAuth(iamSvc *iam.Service, cookieName string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/auth/login" || r.URL.Path == "/health" {
-			next.ServeHTTP(w, r)
-			return
-		}
 		token := readSessionToken(r, cookieName)
 		user, err := iamSvc.Authenticate(r.Context(), token)
 		if err != nil {
@@ -195,7 +190,6 @@ func embeddedFrontend() http.Handler {
 	}
 	fileServer := http.FileServer(http.FS(distFS))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Keep SPA routing working by falling back to index.html for unknown paths.
 		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/health" {
 			http.NotFound(w, r)
 			return

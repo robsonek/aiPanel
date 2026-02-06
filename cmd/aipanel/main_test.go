@@ -93,7 +93,7 @@ func TestNewHandler_ProtectsAPI(t *testing.T) {
 	iamSvc := iam.NewService(store, cfg, logger.New("test"))
 	handler := newHandler(cfg, logger.New("test"), iamSvc)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/nonexistent", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)

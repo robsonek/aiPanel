@@ -10,11 +10,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/robsonek/aiPanel/internal/installer"
 	"github.com/robsonek/aiPanel/internal/modules/iam"
 	"github.com/robsonek/aiPanel/internal/platform/config"
 	"github.com/robsonek/aiPanel/internal/platform/httpserver"
 	"github.com/robsonek/aiPanel/internal/platform/logger"
 	"github.com/robsonek/aiPanel/internal/platform/sqlite"
+	"github.com/robsonek/aiPanel/internal/platform/systemd"
 )
 
 func newHandler(cfg config.Config, log *slog.Logger, iamSvc *iam.Service) http.Handler {
@@ -29,6 +31,9 @@ func main() {
 			return
 		case "admin":
 			runAdmin(os.Args[2:])
+			return
+		case "install":
+			runInstall(os.Args[2:])
 			return
 		}
 	}
@@ -58,11 +63,12 @@ func runServer() {
 	log.Info("aiPanel starting", "addr", cfg.Addr, "env", cfg.Env, "config_path", cfgPath, "data_dir", cfg.DataDir)
 
 	srv := &http.Server{
-		Addr:         cfg.Addr,
-		Handler:      newHandler(cfg, log, iamSvc),
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:              cfg.Addr,
+		Handler:           newHandler(cfg, log, iamSvc),
+		ReadTimeout:       15 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	if err := srv.ListenAndServe(); err != nil {
@@ -104,4 +110,48 @@ func runAdmin(args []string) {
 		os.Exit(1)
 	}
 	fmt.Println("admin user created")
+}
+
+func runInstall(args []string) {
+	defaults := installer.DefaultOptions()
+	fs := flag.NewFlagSet("install", flag.ExitOnError)
+	addr := fs.String("addr", defaults.Addr, "panel listen address")
+	env := fs.String("env", defaults.Env, "panel environment")
+	configPath := fs.String("config", defaults.ConfigPath, "panel config file path")
+	dataDir := fs.String("data-dir", defaults.DataDir, "panel data directory")
+	panelBinary := fs.String("panel-binary", defaults.PanelBinaryPath, "target panel binary path")
+	sourceBinary := fs.String("source-binary", "", "source panel binary path (defaults to current executable)")
+	unitFile := fs.String("unit-file", defaults.UnitFilePath, "systemd unit file path")
+	stateFile := fs.String("state-file", defaults.StateFilePath, "installer checkpoint state path")
+	reportFile := fs.String("report-file", defaults.ReportFilePath, "installer report path")
+	logFile := fs.String("log-file", defaults.LogFilePath, "installer log path")
+	skipHealthcheck := fs.Bool("skip-healthcheck", false, "skip final /health check")
+	dryRun := fs.Bool("dry-run", false, "do not execute system commands")
+	_ = fs.Parse(args)
+
+	opts := installer.DefaultOptions()
+	opts.Addr = strings.TrimSpace(*addr)
+	opts.Env = strings.TrimSpace(*env)
+	opts.ConfigPath = strings.TrimSpace(*configPath)
+	opts.DataDir = strings.TrimSpace(*dataDir)
+	opts.PanelBinaryPath = strings.TrimSpace(*panelBinary)
+	opts.SourceBinaryPath = strings.TrimSpace(*sourceBinary)
+	opts.UnitFilePath = strings.TrimSpace(*unitFile)
+	opts.StateFilePath = strings.TrimSpace(*stateFile)
+	opts.ReportFilePath = strings.TrimSpace(*reportFile)
+	opts.LogFilePath = strings.TrimSpace(*logFile)
+	opts.SkipHealthcheck = *skipHealthcheck
+
+	runner := systemd.ExecRunner{DryRun: *dryRun}
+	ins := installer.New(opts, runner)
+	report, err := ins.Run(context.Background())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
+		if report != nil {
+			fmt.Fprintf(os.Stderr, "report: %s\n", opts.ReportFilePath)
+		}
+		os.Exit(1)
+	}
+	fmt.Println("installation finished successfully")
+	fmt.Printf("report: %s\n", opts.ReportFilePath)
 }
