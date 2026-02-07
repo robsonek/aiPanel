@@ -204,8 +204,8 @@ jobs:
   go-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with: { go-version-file: go.mod }
       - run: go test ./... -count=1 -race -timeout=5m
       - run: |
@@ -221,9 +221,9 @@ jobs:
   frontend-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4.2.0
+      - uses: actions/setup-node@v6
         with: { node-version-file: .node-version, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - run: pnpm vitest run --reporter=verbose --coverage
@@ -233,17 +233,17 @@ jobs:
   go-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with: { go-version-file: go.mod }
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@v9.2.0
         with: { version: latest, args: --timeout=3m }
 
   security-scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with: { go-version-file: go.mod }
       - run: go install github.com/securego/gosec/v2/cmd/gosec@latest && gosec ./...
       - run: go install golang.org/x/vuln/cmd/govulncheck@latest && govulncheck ./...
@@ -254,19 +254,19 @@ jobs:
   build-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with: { go-version-file: go.mod }
       - run: CGO_ENABLED=0 go build -o /dev/null ./cmd/aipanel
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v4.2.0
+      - uses: actions/setup-node@v6
         with: { node-version-file: .node-version, cache: pnpm }
       - run: pnpm install --frozen-lockfile && pnpm vite build
 
   code-hygiene:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with: { fetch-depth: 0 }
       - name: Check for TODO/FIXME/HACK in new code (warning only)
         run: |
@@ -346,7 +346,7 @@ jobs:
     runs-on: [self-hosted, debian13]
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: pnpm playwright install --with-deps
       - run: pnpm playwright test --project=chromium --project=firefox
 
@@ -358,7 +358,7 @@ jobs:
       matrix:
         db: [mariadb, postgresql, both]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Restore clean VM snapshot
         run: ./scripts/ci/restore-clean-snapshot.sh
       - name: Run installer
@@ -370,8 +370,8 @@ jobs:
     runs-on: [self-hosted, debian13]
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with: { go-version-file: go.mod }
       - run: go test ./internal/adapter/... -tags=smoke -count=1 -timeout=15m
 
@@ -379,7 +379,7 @@ jobs:
     runs-on: [self-hosted, debian13]
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: pnpm playwright test tests/visual/
       - uses: actions/upload-artifact@v4
         if: failure()
@@ -391,8 +391,8 @@ jobs:
     runs-on: [self-hosted, debian13]
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with: { go-version-file: go.mod }
       - name: Download previous benchmark baseline
         uses: actions/download-artifact@v4
@@ -417,7 +417,7 @@ jobs:
     runs-on: [self-hosted, debian13]
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: aipanel backup --dry-run
       - run: aipanel restore --dry-run --latest
 
@@ -425,8 +425,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with: { go-version-file: go.mod }
       - name: SBOM — Go modules
         run: cyclonedx-gomod app -output sbom-go.json -json
@@ -527,11 +527,11 @@ jobs:
           - goos: linux
             goarch: arm64
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with: { go-version-file: go.mod }
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v4.2.0
+      - uses: actions/setup-node@v6
         with: { node-version-file: .node-version, cache: pnpm }
       - run: pnpm install --frozen-lockfile && pnpm vite build
       - name: Build Go binary
@@ -551,11 +551,11 @@ jobs:
       contents: write
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with: { fetch-depth: 0 }
       - uses: actions/download-artifact@v4
         with: { path: dist/, merge-multiple: true }
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with: { go-version-file: go.mod }
       - uses: sigstore/cosign-installer@v3
 

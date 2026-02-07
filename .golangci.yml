@@ -8,13 +8,11 @@ linters:
     - gosec
     - ineffassign
     - unused
-
-linters-settings:
-  gosec:
-    excludes:
-      - G104
-
-issues:
-  exclude-dirs:
-    - web
-    - bin
+  settings:
+    gosec:
+      excludes:
+        - G104
+  exclusions:
+    paths:
+      - web
+      - bin
