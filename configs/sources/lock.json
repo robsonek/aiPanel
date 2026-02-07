@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "channels": {
+    "stable": {
+      "nginx": {
+        "version": "1.29.5",
+        "source_url": "https://nginx.org/download/nginx-1.29.5.tar.gz",
+        "source_sha256": "6744768a4114880f37b13a0443244e731bcb3130c0a065d7e37d8fd589ade374",
+        "signature_url": "https://nginx.org/download/nginx-1.29.5.tar.gz.asc",
+        "public_key_fingerprint": "573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62",
+        "build": {
+          "commands": [
+            "./configure --prefix={{install_dir}} --with-http_ssl_module --with-http_v2_module",
+            "make -j$(nproc)",
+            "make install"
+          ]
+        },
+        "systemd": {
+          "name": "aipanel-runtime-nginx.service",
+          "exec_start": "{{runtime_dir}}/nginx/current/sbin/nginx -g \"daemon off;\"",
+          "exec_reload": "/bin/kill -HUP $MAINPID",
+          "exec_stop": "/bin/kill -QUIT $MAINPID"
+        }
+      },
+      "php-fpm": {
+        "version": "8.5.2",
+        "source_url": "https://www.php.net/distributions/php-8.5.2.tar.gz",
+        "source_sha256": "379ccccefcc85f28286444cf01bc0db017c79d513417267f5bb1d804b8428c22",
+        "signature_url": "https://www.php.net/distributions/php-8.5.2.tar.gz.asc",
+        "public_key_fingerprint": "1729F83938DA44E27BA0F4D3DBDB397470D12172",
+        "build": {
+          "commands": [
+            "./configure --prefix={{install_dir}} --enable-fpm --with-fpm-user=www-data --with-fpm-group=www-data --with-zlib --with-openssl",
+            "make -j$(nproc)",
+            "make install"
+          ]
+        },
+        "systemd": {
+          "name": "aipanel-runtime-php-fpm.service",
+          "exec_start": "{{runtime_dir}}/php-fpm/current/sbin/php-fpm --nodaemonize"
+        }
+      },
+      "mariadb": {
+        "version": "11.8.6",
+        "source_url": "https://archive.mariadb.org/mariadb-11.8.6/bintar-linux-systemd-x86_64/mariadb-11.8.6-linux-systemd-x86_64.tar.gz",
+        "source_sha256": "9367b26f63a7f4936acf914a987d15f37e2449ef568552b70d3c4ffa48896f8b",
+        "signature_url": "https://archive.mariadb.org/mariadb-11.8.6/bintar-linux-systemd-x86_64/mariadb-11.8.6-linux-systemd-x86_64.tar.gz.asc",
+        "public_key_fingerprint": "199369E5404BD5FC7D2FE43BCBCB082A1BB943DB",
+        "build": {
+          "commands": [
+            "cp -a . {{install_dir}}/"
+          ]
+        },
+        "systemd": {
+          "name": "aipanel-runtime-mariadb.service",
+          "exec_start": "{{runtime_dir}}/mariadb/current/bin/mariadbd --basedir={{runtime_dir}}/mariadb/current --datadir={{runtime_dir}}/mariadb/current/data --plugin-dir={{runtime_dir}}/mariadb/current/lib/plugin --user=root"
+        }
+      }
+    },
+    "edge": {
+      "nginx": {
+        "version": "1.29.5",
+        "source_url": "https://nginx.org/download/nginx-1.29.5.tar.gz",
+        "source_sha256": "6744768a4114880f37b13a0443244e731bcb3130c0a065d7e37d8fd589ade374",
+        "signature_url": "https://nginx.org/download/nginx-1.29.5.tar.gz.asc",
+        "public_key_fingerprint": "573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62",
+        "build": {
+          "commands": [
+            "./configure --prefix={{install_dir}} --with-http_ssl_module --with-http_v2_module",
+            "make -j$(nproc)",
+            "make install"
+          ]
+        },
+        "systemd": {
+          "name": "aipanel-runtime-nginx.service",
+          "exec_start": "{{runtime_dir}}/nginx/current/sbin/nginx -g \"daemon off;\"",
+          "exec_reload": "/bin/kill -HUP $MAINPID",
+          "exec_stop": "/bin/kill -QUIT $MAINPID"
+        }
+      },
+      "php-fpm": {
+        "version": "8.5.2",
+        "source_url": "https://www.php.net/distributions/php-8.5.2.tar.gz",
+        "source_sha256": "379ccccefcc85f28286444cf01bc0db017c79d513417267f5bb1d804b8428c22",
+        "signature_url": "https://www.php.net/distributions/php-8.5.2.tar.gz.asc",
+        "public_key_fingerprint": "1729F83938DA44E27BA0F4D3DBDB397470D12172",
+        "build": {
+          "commands": [
+            "./configure --prefix={{install_dir}} --enable-fpm --with-fpm-user=www-data --with-fpm-group=www-data --with-zlib --with-openssl",
+            "make -j$(nproc)",
+            "make install"
+          ]
+        },
+        "systemd": {
+          "name": "aipanel-runtime-php-fpm.service",
+          "exec_start": "{{runtime_dir}}/php-fpm/current/sbin/php-fpm --nodaemonize"
+        }
+      },
+      "mariadb": {
+        "version": "11.8.6",
+        "source_url": "https://archive.mariadb.org/mariadb-11.8.6/bintar-linux-systemd-x86_64/mariadb-11.8.6-linux-systemd-x86_64.tar.gz",
+        "source_sha256": "9367b26f63a7f4936acf914a987d15f37e2449ef568552b70d3c4ffa48896f8b",
+        "signature_url": "https://archive.mariadb.org/mariadb-11.8.6/bintar-linux-systemd-x86_64/mariadb-11.8.6-linux-systemd-x86_64.tar.gz.asc",
+        "public_key_fingerprint": "199369E5404BD5FC7D2FE43BCBCB082A1BB943DB",
+        "build": {
+          "commands": [
+            "cp -a . {{install_dir}}/"
+          ]
+        },
+        "systemd": {
+          "name": "aipanel-runtime-mariadb.service",
+          "exec_start": "{{runtime_dir}}/mariadb/current/bin/mariadbd --basedir={{runtime_dir}}/mariadb/current --datadir={{runtime_dir}}/mariadb/current/data --plugin-dir={{runtime_dir}}/mariadb/current/lib/plugin --user=root"
+        }
+      }
+    }
+  }
+}

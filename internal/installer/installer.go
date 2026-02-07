@@ -2,8 +2,10 @@
 package installer
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -13,9 +15,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -32,18 +37,24 @@ import (
 
 // Options controls installer behavior.
 type Options struct {
-	Addr             string
-	Env              string
-	ConfigPath       string
-	DataDir          string
-	PanelBinaryPath  string
-	SourceBinaryPath string
-	UnitFilePath     string
-	StateFilePath    string
-	ReportFilePath   string
-	LogFilePath      string
-	AdminEmail       string
-	AdminPassword    string
+	Addr                  string
+	Env                   string
+	ConfigPath            string
+	DataDir               string
+	PanelBinaryPath       string
+	SourceBinaryPath      string
+	UnitFilePath          string
+	StateFilePath         string
+	ReportFilePath        string
+	LogFilePath           string
+	AdminEmail            string
+	AdminPassword         string
+	InstallMode           string
+	RuntimeChannel        string
+	RuntimeLockPath       string
+	RuntimeManifestURL    string
+	RuntimeInstallDir     string
+	VerifyUpstreamSources bool
 
 	OSReleasePath string
 	MemInfoPath   string
@@ -63,6 +74,18 @@ type Options struct {
 	SkipHealthcheck bool
 }
 
+const (
+	// InstallModeSourceBuild compiles runtime directly from upstream sources.
+	InstallModeSourceBuild = "source-build"
+)
+
+const (
+	// RuntimeChannelStable is the default pinned release channel.
+	RuntimeChannelStable = "stable"
+	// RuntimeChannelEdge tracks the newest validated runtime source pins.
+	RuntimeChannelEdge = "edge"
+)
+
 // DefaultOptions returns production defaults for installer phase 1.
 func DefaultOptions() Options {
 	return Options{
@@ -77,6 +100,12 @@ func DefaultOptions() Options {
 		LogFilePath:            "/var/log/aipanel/install.log",
 		AdminEmail:             "admin@example.com",
 		AdminPassword:          "ChangeMe12345!",
+		InstallMode:            InstallModeSourceBuild,
+		RuntimeChannel:         RuntimeChannelStable,
+		RuntimeLockPath:        "/etc/aipanel/sources.lock.json",
+		RuntimeManifestURL:     "",
+		RuntimeInstallDir:      "/opt/aipanel/runtime",
+		VerifyUpstreamSources:  true,
 		OSReleasePath:          "/etc/os-release",
 		MemInfoPath:            "/proc/meminfo",
 		Proc1ExePath:           "/proc/1/exe",
@@ -129,6 +158,21 @@ func (o Options) withDefaults() Options {
 	if strings.TrimSpace(o.AdminPassword) == "" {
 		o.AdminPassword = d.AdminPassword
 	}
+	if strings.TrimSpace(o.InstallMode) == "" {
+		o.InstallMode = d.InstallMode
+	}
+	if strings.TrimSpace(o.RuntimeChannel) == "" {
+		o.RuntimeChannel = d.RuntimeChannel
+	}
+	if strings.TrimSpace(o.RuntimeLockPath) == "" {
+		o.RuntimeLockPath = d.RuntimeLockPath
+	}
+	if strings.TrimSpace(o.RuntimeManifestURL) == "" {
+		o.RuntimeManifestURL = d.RuntimeManifestURL
+	}
+	if strings.TrimSpace(o.RuntimeInstallDir) == "" {
+		o.RuntimeInstallDir = d.RuntimeInstallDir
+	}
 	if strings.TrimSpace(o.OSReleasePath) == "" {
 		o.OSReleasePath = d.OSReleasePath
 	}
@@ -168,6 +212,36 @@ func (o Options) withDefaults() Options {
 	return o
 }
 
+func (o Options) validate() error {
+	mode := strings.ToLower(strings.TrimSpace(o.InstallMode))
+	switch mode {
+	case InstallModeSourceBuild:
+	default:
+		return fmt.Errorf("invalid install mode: %s", o.InstallMode)
+	}
+
+	channel := strings.ToLower(strings.TrimSpace(o.RuntimeChannel))
+	switch channel {
+	case RuntimeChannelStable, RuntimeChannelEdge:
+	default:
+		return fmt.Errorf("invalid runtime channel: %s", o.RuntimeChannel)
+	}
+
+	if isRuntimeSourceMode(mode) &&
+		strings.TrimSpace(o.RuntimeLockPath) == "" &&
+		strings.TrimSpace(o.RuntimeManifestURL) == "" {
+		return fmt.Errorf("%s mode requires runtime lock path or runtime manifest URL", mode)
+	}
+	if isRuntimeSourceMode(mode) && strings.TrimSpace(o.RuntimeInstallDir) == "" {
+		return fmt.Errorf("%s mode requires runtime install dir", mode)
+	}
+	return nil
+}
+
+func isRuntimeSourceMode(mode string) bool {
+	return strings.EqualFold(strings.TrimSpace(mode), InstallModeSourceBuild)
+}
+
 // StepResult captures one installation step outcome.
 type StepResult struct {
 	Name       string `json:"name"`
@@ -190,11 +264,45 @@ type checkpointState struct {
 	Completed map[string]bool `json:"completed"`
 }
 
+type commandLoggingRunner struct {
+	delegate systemd.Runner
+	logf     func(string, ...any)
+}
+
+func (r commandLoggingRunner) Run(ctx context.Context, name string, args ...string) (string, error) {
+	command := strings.TrimSpace(name + " " + strings.Join(args, " "))
+	startedAt := time.Now()
+	if r.logf != nil {
+		r.logf("[command] start: %s", command)
+	}
+	out, err := r.delegate.Run(ctx, name, args...)
+	duration := time.Since(startedAt).Round(time.Millisecond)
+	trimmedOut := strings.TrimSpace(out)
+	if err != nil {
+		if r.logf != nil {
+			r.logf("[command] failed after %s: %s", duration, command)
+			if trimmedOut != "" {
+				r.logf("[command] output:\n%s", trimmedOut)
+			}
+			r.logf("[command] error: %v", err)
+		}
+		return out, fmt.Errorf("command %q failed after %s: %w", command, duration, err)
+	}
+	if r.logf != nil {
+		r.logf("[command] ok after %s: %s", duration, command)
+		if trimmedOut != "" {
+			r.logf("[command] output:\n%s", trimmedOut)
+		}
+	}
+	return out, nil
+}
+
 // Installer orchestrates phase 1 setup on Debian 13.
 type Installer struct {
-	opts   Options
-	runner systemd.Runner
-	now    func() time.Time
+	opts        Options
+	runner      systemd.Runner
+	now         func() time.Time
+	runtimeLock *RuntimeSourceLock
 }
 
 // New returns a configured installer.
@@ -203,15 +311,27 @@ func New(opts Options, runner systemd.Runner) *Installer {
 	if runner == nil {
 		runner = systemd.ExecRunner{}
 	}
-	return &Installer{
-		opts:   opts,
-		runner: runner,
-		now:    time.Now,
+	ins := &Installer{
+		opts: opts,
+		now:  time.Now,
 	}
+	ins.runner = commandLoggingRunner{
+		delegate: runner,
+		logf:     ins.logf,
+	}
+	return ins
 }
 
 // Run executes installer phase 1 with checkpoint-based idempotency.
 func (i *Installer) Run(ctx context.Context) (*Report, error) {
+	if err := i.opts.validate(); err != nil {
+		return nil, err
+	}
+	if isRuntimeSourceMode(i.opts.InstallMode) {
+		if _, err := i.resolveRuntimeSourceLock(ctx); err != nil {
+			return nil, fmt.Errorf("load runtime source lock: %w", err)
+		}
+	}
 	report := &Report{
 		InstalledAt: i.now().UTC().Format(time.RFC3339),
 		Status:      "in_progress",
@@ -276,6 +396,12 @@ func (i *Installer) Run(ctx context.Context) (*Report, error) {
 	}
 	if runErr == nil {
 		runErr = execStep(steps.PrepareDirs, i.prepareDirectories)
+	}
+	if runErr == nil {
+		runErr = execStep(steps.InstallRuntime, i.installRuntimeArtifacts)
+	}
+	if runErr == nil {
+		runErr = execStep(steps.ActivateRuntime, i.activateRuntimeServices)
 	}
 	if runErr == nil {
 		runErr = execStep(steps.CopyBinary, i.copyBinary)
@@ -368,66 +494,894 @@ func (i *Installer) runSystemUpdate(ctx context.Context) error {
 	if _, err := i.runner.Run(ctx, "apt-get", "update"); err != nil {
 		return fmt.Errorf("apt update: %w", err)
 	}
-	if _, err := i.runner.Run(ctx, "apt-get", "upgrade", "-y"); err != nil {
-		return fmt.Errorf("apt upgrade: %w", err)
-	}
 	return nil
 }
 
 func (i *Installer) addRepositories(ctx context.Context) error {
-	if _, err := i.runner.Run(ctx, "apt-get", "install", "-y", "ca-certificates", "curl", "gnupg", "lsb-release"); err != nil {
-		i.logf("[add_repositories] fallback to distro packages: %v", err)
-		return nil
-	}
-	if _, err := i.runner.Run(ctx, "mkdir", "-p", "/etc/apt/keyrings"); err != nil {
-		i.logf("[add_repositories] cannot create keyring dir, skipping sury repo: %v", err)
-		return nil
-	}
-	if _, err := i.runner.Run(ctx, "bash", "-lc", "curl -fsSL https://packages.sury.org/php/apt.gpg | gpg --dearmor -o /etc/apt/keyrings/sury-php.gpg"); err != nil {
-		i.logf("[add_repositories] sury key setup failed, using distro packages: %v", err)
-		return nil
-	}
-	if _, err := i.runner.Run(ctx, "bash", "-lc", "echo \"deb [signed-by=/etc/apt/keyrings/sury-php.gpg] https://packages.sury.org/php/ $(lsb_release -sc) main\" > /etc/apt/sources.list.d/sury-php.list"); err != nil {
-		i.logf("[add_repositories] sury repo setup failed, using distro packages: %v", err)
-		return nil
-	}
-	if _, err := i.runner.Run(ctx, "apt-get", "update"); err != nil {
-		i.logf("[add_repositories] apt update after sury failed, using distro packages: %v", err)
-		return nil
-	}
+	i.logf("[add_repositories] skipped in source-build mode")
 	return nil
 }
 
 func (i *Installer) installPackages(ctx context.Context) error {
-	primary := []string{
-		"apt-get", "install", "-y",
-		"nginx",
-		"php8.3-fpm",
-		"php8.4-fpm",
-		"mariadb-server",
-		"acl",
-		"curl",
-		"git",
+	packages := []string{
+		"build-essential",
+		"ca-certificates",
+		"cmake",
+		"gnupg",
+		"libncurses-dev",
+		"libpcre2-dev",
+		"libreadline-dev",
+		"libsqlite3-dev",
+		"libssl-dev",
+		"libxml2-dev",
+		"pkg-config",
+		"sqlite3",
+		"zlib1g-dev",
 	}
-	if _, err := i.runner.Run(ctx, primary[0], primary[1:]...); err == nil {
-		return nil
-	}
-	// Fallback for environments where php8.4 package is unavailable.
-	if _, err := i.runner.Run(
-		ctx,
-		"apt-get",
-		"install",
-		"-y",
-		"nginx",
-		"php8.3-fpm",
-		"mariadb-server",
-		"acl",
-		"curl",
-		"git",
-	); err != nil {
-		return fmt.Errorf("apt install packages: %w", err)
+	i.logf("[install_packages] apt prerequisites: %s", strings.Join(packages, ", "))
+	installArgs := append([]string{"install", "-y", "--no-install-recommends"}, packages...)
+	if _, err := i.runner.Run(ctx, "apt-get", installArgs...); err != nil {
+		return fmt.Errorf("apt install installer prerequisites: %w", err)
 	}
 	return nil
+}
+
+func (i *Installer) installRuntimeArtifacts(ctx context.Context) error {
+	if !isRuntimeSourceMode(i.opts.InstallMode) {
+		return nil
+	}
+	return i.installRuntimeFromSources(ctx)
+}
+
+func (i *Installer) installRuntimeFromSources(ctx context.Context) error {
+	lock, err := i.resolveRuntimeSourceLock(ctx)
+	if err != nil {
+		return err
+	}
+	channel, err := i.runtimeChannel(lock)
+	if err != nil {
+		return err
+	}
+
+	componentNames := make([]string, 0, len(channel))
+	for name := range channel {
+		componentNames = append(componentNames, name)
+	}
+	sort.Strings(componentNames)
+
+	for _, componentName := range componentNames {
+		component := channel[componentName]
+		if err := i.installRuntimeComponentFromSource(ctx, componentName, component); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (i *Installer) installRuntimeComponentFromSource(
+	ctx context.Context,
+	componentName string,
+	component RuntimeComponentLock,
+) error {
+	componentName = strings.TrimSpace(componentName)
+	if componentName == "" {
+		return fmt.Errorf("runtime component name is empty")
+	}
+	if len(component.Build.Commands) == 0 {
+		return fmt.Errorf("runtime build commands are missing for %s", componentName)
+	}
+	i.logf(
+		"[install_runtime] component=%s version=%s source=%s",
+		componentName,
+		component.Version,
+		component.SourceURL,
+	)
+
+	versionDir := filepath.Join(i.opts.RuntimeInstallDir, componentName, component.Version)
+	currentLink := filepath.Join(i.opts.RuntimeInstallDir, componentName, "current")
+	if err := os.RemoveAll(versionDir); err != nil {
+		return fmt.Errorf("reset runtime component dir %s: %w", componentName, err)
+	}
+	if err := os.MkdirAll(versionDir, 0o750); err != nil {
+		return fmt.Errorf("create runtime component dir %s: %w", componentName, err)
+	}
+
+	sourceArchivePath, err := i.downloadRuntimeArtifact(ctx, component.SourceURL)
+	if err != nil {
+		return fmt.Errorf("download runtime source %s: %w", componentName, err)
+	}
+	defer func() {
+		_ = os.Remove(sourceArchivePath)
+	}()
+
+	sourceHash, err := fileSHA256(sourceArchivePath)
+	if err != nil {
+		return fmt.Errorf("checksum runtime source %s: %w", componentName, err)
+	}
+	if !strings.EqualFold(sourceHash, component.SourceSHA256) {
+		return fmt.Errorf(
+			"runtime source checksum mismatch for %s: expected %s got %s",
+			componentName,
+			component.SourceSHA256,
+			sourceHash,
+		)
+	}
+	i.logf("[install_runtime] checksum verified for %s: %s", componentName, sourceHash)
+
+	if i.opts.VerifyUpstreamSources {
+		if err := i.verifyRuntimeSourceSignature(ctx, componentName, component, sourceArchivePath); err != nil {
+			return err
+		}
+	}
+
+	buildRoot, err := os.MkdirTemp("", "aipanel-source-build-"+componentName+"-*")
+	if err != nil {
+		return fmt.Errorf("create build dir for %s: %w", componentName, err)
+	}
+	defer func() {
+		_ = os.RemoveAll(buildRoot)
+	}()
+
+	if err := extractArchive(sourceArchivePath, buildRoot); err != nil {
+		return fmt.Errorf("extract runtime source %s: %w", componentName, err)
+	}
+
+	sourceDir, err := detectSourceDir(buildRoot)
+	if err != nil {
+		return fmt.Errorf("resolve source dir for %s: %w", componentName, err)
+	}
+
+	for idx, command := range component.Build.Commands {
+		rendered := renderRuntimeBuildCommand(i.opts, componentName, component.Version, command)
+		i.logf(
+			"[install_runtime] %s build command %d/%d: %s",
+			componentName,
+			idx+1,
+			len(component.Build.Commands),
+			rendered,
+		)
+		shellCommand := "cd " + shellQuote(sourceDir) + " && " + rendered
+		if _, err := i.runner.Run(ctx, "bash", "-lc", shellCommand); err != nil {
+			return fmt.Errorf("build %s command %d failed: %w", componentName, idx+1, err)
+		}
+	}
+
+	hasFiles, err := directoryHasEntries(versionDir)
+	if err != nil {
+		return fmt.Errorf("inspect runtime install dir for %s: %w", componentName, err)
+	}
+	if !hasFiles {
+		return fmt.Errorf("runtime build output is empty for %s: %s", componentName, versionDir)
+	}
+
+	if err := os.Remove(currentLink); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove current runtime symlink for %s: %w", componentName, err)
+	}
+	if err := os.Symlink(versionDir, currentLink); err != nil {
+		return fmt.Errorf("create current runtime symlink for %s: %w", componentName, err)
+	}
+	i.logf("[install_runtime] activated %s current -> %s", componentName, versionDir)
+	return nil
+}
+
+func (i *Installer) verifyRuntimeSourceSignature(
+	ctx context.Context,
+	componentName string,
+	component RuntimeComponentLock,
+	archivePath string,
+) error {
+	signatureURL := strings.TrimSpace(component.SignatureURL)
+	if signatureURL == "" {
+		return fmt.Errorf("runtime signature_url is missing for %s", componentName)
+	}
+	fingerprint := strings.TrimSpace(component.PublicKeyFingerprint)
+	if fingerprint == "" {
+		return fmt.Errorf("runtime public_key_fingerprint is missing for %s", componentName)
+	}
+
+	signatureData, err := i.downloadBytes(ctx, signatureURL)
+	if err != nil {
+		return fmt.Errorf("download runtime signature %s: %w", componentName, err)
+	}
+	signaturePath, err := writeTempBytes("aipanel-runtime-signature-*", signatureData)
+	if err != nil {
+		return fmt.Errorf("write runtime signature %s: %w", componentName, err)
+	}
+	defer func() {
+		_ = os.Remove(signaturePath)
+	}()
+
+	gnupgHome, err := os.MkdirTemp("", "aipanel-gpg-*")
+	if err != nil {
+		return fmt.Errorf("create gpg home for %s: %w", componentName, err)
+	}
+	defer func() {
+		_ = os.RemoveAll(gnupgHome)
+	}()
+
+	verifyCmd := strings.Join([]string{
+		"export GNUPGHOME=" + shellQuote(gnupgHome),
+		"gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys " + shellQuote(fingerprint),
+		"gpg --batch --verify " + shellQuote(signaturePath) + " " + shellQuote(archivePath),
+	}, " && ")
+	if _, err := i.runner.Run(ctx, "bash", "-lc", verifyCmd); err != nil {
+		return fmt.Errorf("verify upstream signature for %s: %w", componentName, err)
+	}
+	return nil
+}
+
+func (i *Installer) activateRuntimeServices(ctx context.Context) error {
+	if !isRuntimeSourceMode(i.opts.InstallMode) {
+		return nil
+	}
+	lock, err := i.resolveRuntimeSourceLock(ctx)
+	if err != nil {
+		return err
+	}
+	channel, err := i.runtimeChannel(lock)
+	if err != nil {
+		return err
+	}
+	unitDir := filepath.Dir(i.opts.UnitFilePath)
+	if err := os.MkdirAll(unitDir, 0o750); err != nil {
+		return fmt.Errorf("create systemd unit dir: %w", err)
+	}
+
+	componentNames := make([]string, 0, len(channel))
+	for name := range channel {
+		componentNames = append(componentNames, name)
+	}
+	sort.Strings(componentNames)
+
+	if err := i.prepareRuntimeCompatibility(ctx, channel, componentNames); err != nil {
+		return err
+	}
+
+	unitNames := make([]string, 0, len(componentNames))
+	for _, componentName := range componentNames {
+		component := channel[componentName]
+		unitName := strings.TrimSpace(component.Systemd.Name)
+		execStart := strings.TrimSpace(component.Systemd.ExecStart)
+		if unitName == "" || execStart == "" {
+			i.logf("[activate_runtime_services] skipping component %s (no systemd unit spec)", componentName)
+			continue
+		}
+		rendered := renderRuntimeSystemdUnit(i.opts, componentName, component)
+		unitPath := filepath.Join(unitDir, unitName)
+		if err := writeTextFile(unitPath, rendered, 0o644); err != nil {
+			return fmt.Errorf("write runtime unit for %s: %w", componentName, err)
+		}
+		unitNames = append(unitNames, unitName)
+	}
+	if err := i.installRuntimeSystemdAliases(channel, unitDir); err != nil {
+		return err
+	}
+
+	if len(unitNames) == 0 {
+		i.logf("[activate_runtime_services] no runtime units declared in lockfile")
+		return nil
+	}
+
+	if err := systemd.DaemonReload(ctx, i.runner); err != nil {
+		return fmt.Errorf("systemd daemon-reload for runtime units: %w", err)
+	}
+	for _, unitName := range unitNames {
+		if err := systemd.EnableNow(ctx, i.runner, unitName); err != nil {
+			return fmt.Errorf("enable runtime unit %s: %w", unitName, err)
+		}
+	}
+	return nil
+}
+
+var majorMinorVersionPattern = regexp.MustCompile(`^\d+\.\d+`)
+
+func (i *Installer) prepareRuntimeCompatibility(
+	ctx context.Context,
+	channel RuntimeChannelLock,
+	componentNames []string,
+) error {
+	for _, componentName := range componentNames {
+		component := channel[componentName]
+		switch componentName {
+		case "nginx":
+			if err := i.ensureRuntimeNginxConfig(); err != nil {
+				return err
+			}
+			if err := i.ensureSymlink(
+				filepath.Join(filepath.Dir(i.opts.PanelBinaryPath), "nginx"),
+				filepath.Join(i.opts.RuntimeInstallDir, "nginx", "current", "sbin", "nginx"),
+			); err != nil {
+				return fmt.Errorf("install nginx command alias: %w", err)
+			}
+		case "php-fpm":
+			version := majorMinorVersion(component.Version)
+			if version == "" {
+				return fmt.Errorf("invalid php-fpm version in runtime lock: %q", component.Version)
+			}
+			if err := i.ensureRuntimePHPFPMConfig(version); err != nil {
+				return err
+			}
+		case "mariadb":
+			if err := i.ensureRuntimeMariaDBBootstrap(ctx); err != nil {
+				return err
+			}
+			if err := i.ensureSymlink(
+				filepath.Join(filepath.Dir(i.opts.PanelBinaryPath), "mariadb"),
+				filepath.Join(i.opts.RuntimeInstallDir, "mariadb", "current", "bin", "mariadb"),
+			); err != nil {
+				return fmt.Errorf("install mariadb command alias: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+func (i *Installer) installRuntimeSystemdAliases(channel RuntimeChannelLock, unitDir string) error {
+	if component, ok := channel["nginx"]; ok {
+		unitName := strings.TrimSpace(component.Systemd.Name)
+		if unitName != "" {
+			if err := i.ensureSymlink(
+				filepath.Join(unitDir, "nginx.service"),
+				filepath.Join(unitDir, unitName),
+			); err != nil {
+				return fmt.Errorf("install nginx systemd alias: %w", err)
+			}
+		}
+	}
+	if component, ok := channel["mariadb"]; ok {
+		unitName := strings.TrimSpace(component.Systemd.Name)
+		if unitName != "" {
+			if err := i.ensureSymlink(
+				filepath.Join(unitDir, "mariadb.service"),
+				filepath.Join(unitDir, unitName),
+			); err != nil {
+				return fmt.Errorf("install mariadb systemd alias: %w", err)
+			}
+		}
+	}
+	if component, ok := channel["php-fpm"]; ok {
+		unitName := strings.TrimSpace(component.Systemd.Name)
+		version := majorMinorVersion(component.Version)
+		if unitName != "" && version != "" {
+			alias := "php" + version + "-fpm.service"
+			if err := i.ensureSymlink(
+				filepath.Join(unitDir, alias),
+				filepath.Join(unitDir, unitName),
+			); err != nil {
+				return fmt.Errorf("install php-fpm systemd alias: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+func (i *Installer) ensureSymlink(path, target string) error {
+	if strings.TrimSpace(path) == "" || strings.TrimSpace(target) == "" {
+		return fmt.Errorf("path and target are required")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		return fmt.Errorf("create symlink parent dir: %w", err)
+	}
+	info, err := os.Lstat(path)
+	if err == nil {
+		if info.Mode()&os.ModeSymlink == 0 {
+			i.logf("[activate_runtime_services] skip symlink %s -> %s (path exists and is not symlink)", path, target)
+			return nil
+		}
+		currentTarget, readErr := os.Readlink(path)
+		if readErr == nil && currentTarget == target {
+			return nil
+		}
+		if removeErr := os.Remove(path); removeErr != nil {
+			return fmt.Errorf("remove old symlink %s: %w", path, removeErr)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect symlink path %s: %w", path, err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		return fmt.Errorf("create symlink %s -> %s: %w", path, target, err)
+	}
+	return nil
+}
+
+func majorMinorVersion(version string) string {
+	return majorMinorVersionPattern.FindString(strings.TrimSpace(version))
+}
+
+func (i *Installer) runtimePHPMajorMinorVersion(ctx context.Context) (string, error) {
+	lock, err := i.resolveRuntimeSourceLock(ctx)
+	if err != nil {
+		return "", err
+	}
+	channel, err := i.runtimeChannel(lock)
+	if err != nil {
+		return "", err
+	}
+	component, ok := channel["php-fpm"]
+	if !ok {
+		return "", nil
+	}
+	version := majorMinorVersion(component.Version)
+	if version == "" {
+		return "", fmt.Errorf("invalid php-fpm version in runtime lock: %q", component.Version)
+	}
+	return version, nil
+}
+
+func (i *Installer) ensureRuntimeNginxConfig() error {
+	confDir := filepath.Join(i.opts.RuntimeInstallDir, "nginx", "current", "conf")
+	if err := os.MkdirAll(confDir, 0o750); err != nil {
+		return fmt.Errorf("create runtime nginx conf dir: %w", err)
+	}
+	snippetsDir := filepath.Join(confDir, "snippets")
+	if err := os.MkdirAll(snippetsDir, 0o750); err != nil {
+		return fmt.Errorf("create runtime nginx snippets dir: %w", err)
+	}
+	if err := writeTextFile(
+		filepath.Join(snippetsDir, "fastcgi-php.conf"),
+		sourceRuntimeFastCGIPHPConf,
+		0o644,
+	); err != nil {
+		return fmt.Errorf("write runtime nginx fastcgi snippet: %w", err)
+	}
+	for _, dir := range []string{
+		"/var/log/nginx",
+		"/var/lib/nginx/body",
+		"/var/lib/nginx/proxy",
+		"/var/lib/nginx/fastcgi",
+		"/var/lib/nginx/uwsgi",
+		"/var/lib/nginx/scgi",
+	} {
+		if err := os.MkdirAll(pathInRootFS(i.opts.RootFSPath, dir), 0o750); err != nil {
+			return fmt.Errorf("create runtime nginx dir %s: %w", dir, err)
+		}
+	}
+	confPath := filepath.Join(confDir, "nginx.conf")
+	if err := writeTextFile(confPath, sourceRuntimeNginxConf, 0o644); err != nil {
+		return fmt.Errorf("write runtime nginx config: %w", err)
+	}
+	return nil
+}
+
+func (i *Installer) ensureRuntimePHPFPMConfig(version string) error {
+	runtimeEtcDir := filepath.Join(i.opts.RuntimeInstallDir, "php-fpm", "current", "etc")
+	if err := os.MkdirAll(runtimeEtcDir, 0o750); err != nil {
+		return fmt.Errorf("create runtime php-fpm etc dir: %w", err)
+	}
+	confPath := filepath.Join(runtimeEtcDir, "php-fpm.conf")
+	defaultConfPath := confPath + ".default"
+	if _, err := os.Stat(confPath); os.IsNotExist(err) {
+		if body, readErr := os.ReadFile(defaultConfPath); readErr == nil { //nolint:gosec // Installer controls runtime path.
+			if err := writeBinaryFile(confPath, body, 0o644); err != nil {
+				return fmt.Errorf("write runtime php-fpm.conf: %w", err)
+			}
+		}
+	} else if err != nil {
+		return fmt.Errorf("inspect runtime php-fpm.conf: %w", err)
+	}
+
+	runtimePoolDir := filepath.Join(runtimeEtcDir, "php-fpm.d")
+	if err := os.MkdirAll(runtimePoolDir, 0o750); err != nil {
+		return fmt.Errorf("create runtime php-fpm pool dir: %w", err)
+	}
+	defaultPool := filepath.Join(runtimePoolDir, "www.conf")
+	defaultPoolTemplate := filepath.Join(runtimePoolDir, "www.conf.default")
+	if _, err := os.Stat(defaultPool); os.IsNotExist(err) {
+		if body, readErr := os.ReadFile(defaultPoolTemplate); readErr == nil { //nolint:gosec // Installer controls runtime path.
+			if err := writeBinaryFile(defaultPool, body, 0o644); err != nil {
+				return fmt.Errorf("write runtime php-fpm default pool: %w", err)
+			}
+		}
+	}
+
+	compatPoolDir := filepath.Join(i.opts.PHPBaseDir, version, "fpm", "pool.d")
+	if err := ensureParentDir(compatPoolDir); err != nil {
+		return fmt.Errorf("create php compatibility dir: %w", err)
+	}
+	if err := i.ensureSymlink(compatPoolDir, runtimePoolDir); err != nil {
+		return fmt.Errorf("link php compatibility pool dir: %w", err)
+	}
+	return nil
+}
+
+func ensureParentDir(path string) error {
+	return os.MkdirAll(filepath.Dir(path), 0o750)
+}
+
+func pathInRootFS(rootFSPath, absolutePath string) string {
+	root := strings.TrimSpace(rootFSPath)
+	if root == "" || root == "/" {
+		return absolutePath
+	}
+	return filepath.Join(root, strings.TrimPrefix(absolutePath, "/"))
+}
+
+func (i *Installer) ensureRuntimeMariaDBBootstrap(ctx context.Context) error {
+	runtimeDir := filepath.Join(i.opts.RuntimeInstallDir, "mariadb", "current")
+	mysqlDir := filepath.Join(runtimeDir, "data", "mysql")
+	if _, err := os.Stat(mysqlDir); err == nil {
+		return nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("inspect runtime mariadb data dir: %w", err)
+	}
+
+	bootstrapScript := fmt.Sprintf(`
+set -e
+runtime_root=%s
+data_dir="$runtime_root/data"
+mkdir -p "$data_dir"
+{
+  echo "create database if not exists mysql;"
+  echo "use mysql;"
+  echo "SET @auth_root_socket=NULL;"
+  for file in \
+    "$runtime_root/share/mariadb_system_tables.sql" \
+    "$runtime_root/share/mariadb_performance_tables.sql" \
+    "$runtime_root/share/mariadb_system_tables_data.sql" \
+    "$runtime_root/share/fill_help_tables.sql" \
+    "$runtime_root/share/maria_add_gis_sp_bootstrap.sql" \
+    "$runtime_root/share/mariadb_sys_schema.sql"; do
+    if [ -f "$file" ]; then
+      cat "$file"
+    fi
+  done
+} | "$runtime_root/bin/mariadbd" --bootstrap --basedir="$runtime_root" --datadir="$data_dir" --log-warnings=0 --enforce-storage-engine="" --plugin-dir="$runtime_root/lib/plugin" --max_allowed_packet=8M --net_buffer_length=16K --user=root
+`, shellQuote(runtimeDir))
+	if _, err := i.runner.Run(ctx, "bash", "-lc", bootstrapScript); err != nil {
+		return fmt.Errorf("bootstrap runtime mariadb data dir: %w", err)
+	}
+	return nil
+}
+
+func (i *Installer) resolveRuntimeSourceLock(ctx context.Context) (*RuntimeSourceLock, error) {
+	if i.runtimeLock != nil {
+		return i.runtimeLock, nil
+	}
+	manifestURL := strings.TrimSpace(i.opts.RuntimeManifestURL)
+	if manifestURL != "" {
+		data, err := i.downloadBytes(ctx, manifestURL)
+		if err != nil {
+			return nil, fmt.Errorf("download runtime manifest: %w", err)
+		}
+		var lock RuntimeSourceLock
+		if err := json.Unmarshal(data, &lock); err != nil {
+			return nil, fmt.Errorf("decode runtime manifest: %w", err)
+		}
+		if err := lock.Validate(); err != nil {
+			return nil, err
+		}
+		i.runtimeLock = &lock
+		return i.runtimeLock, nil
+	}
+
+	if p := strings.TrimSpace(i.opts.RuntimeLockPath); p != "" {
+		lock, err := LoadRuntimeSourceLock(p)
+		if err != nil {
+			return nil, err
+		}
+		i.runtimeLock = lock
+		return i.runtimeLock, nil
+	}
+	return nil, fmt.Errorf("missing runtime lock path and runtime manifest URL")
+}
+
+func (i *Installer) runtimeChannel(lock *RuntimeSourceLock) (RuntimeChannelLock, error) {
+	channelName := strings.ToLower(strings.TrimSpace(i.opts.RuntimeChannel))
+	channel, ok := lock.Channels[channelName]
+	if !ok {
+		return nil, fmt.Errorf("runtime lock does not contain channel %s", channelName)
+	}
+	return channel, nil
+}
+
+func (i *Installer) downloadRuntimeArtifact(ctx context.Context, artifactURL string) (string, error) {
+	data, err := i.downloadBytes(ctx, artifactURL)
+	if err != nil {
+		return "", err
+	}
+	suffix := archiveSuffix(artifactURL)
+	tmp, err := os.CreateTemp("", "aipanel-runtime-*"+suffix)
+	if err != nil {
+		return "", err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmp.Name())
+		return "", err
+	}
+	return tmp.Name(), nil
+}
+
+func writeTempBytes(pattern string, b []byte) (string, error) {
+	tmp, err := os.CreateTemp("", pattern)
+	if err != nil {
+		return "", err
+	}
+	if _, err := tmp.Write(b); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmp.Name())
+		return "", err
+	}
+	return tmp.Name(), nil
+}
+
+func archiveSuffix(ref string) string {
+	ref = strings.ToLower(strings.TrimSpace(ref))
+	switch {
+	case strings.HasSuffix(ref, ".tar.gz"):
+		return ".tar.gz"
+	case strings.HasSuffix(ref, ".tgz"):
+		return ".tgz"
+	case strings.HasSuffix(ref, ".tar"):
+		return ".tar"
+	default:
+		return ".tar"
+	}
+}
+
+func (i *Installer) downloadBytes(ctx context.Context, ref string) ([]byte, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return nil, fmt.Errorf("empty download reference")
+	}
+	i.logf("[download] start: %s", ref)
+	if strings.HasPrefix(strings.ToLower(ref), "http://") || strings.HasPrefix(strings.ToLower(ref), "https://") {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, ref, nil)
+		if err != nil {
+			return nil, err
+		}
+		client := &http.Client{Timeout: 60 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			_ = resp.Body.Close()
+		}()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<30))
+		if err != nil {
+			return nil, err
+		}
+		i.logf("[download] completed: %s (%d bytes)", ref, len(body))
+		return body, nil
+	}
+	if strings.HasPrefix(strings.ToLower(ref), "file://") {
+		u, err := url.Parse(ref)
+		if err != nil {
+			return nil, err
+		}
+		body, err := os.ReadFile(u.Path) //nolint:gosec // Installer reads explicit runtime manifest/artifact location.
+		if err != nil {
+			return nil, err
+		}
+		i.logf("[download] loaded local file: %s (%d bytes)", u.Path, len(body))
+		return body, nil
+	}
+	body, err := os.ReadFile(ref) //nolint:gosec // Installer reads explicit runtime manifest/artifact location.
+	if err != nil {
+		return nil, err
+	}
+	i.logf("[download] loaded local file: %s (%d bytes)", ref, len(body))
+	return body, nil
+}
+
+func extractArchive(archivePath, destination string) error {
+	f, err := os.Open(archivePath) //nolint:gosec // Installer reads generated temporary archive path.
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = f.Close()
+	}()
+
+	switch {
+	case strings.HasSuffix(archivePath, ".tar.gz"), strings.HasSuffix(archivePath, ".tgz"):
+		gzr, err := gzip.NewReader(f)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			_ = gzr.Close()
+		}()
+		return extractTar(gzr, destination)
+	case strings.HasSuffix(archivePath, ".tar"):
+		return extractTar(f, destination)
+	default:
+		return fmt.Errorf("unsupported artifact format for %s", archivePath)
+	}
+}
+
+func detectSourceDir(root string) (string, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return "", err
+	}
+	if len(entries) == 1 && entries[0].IsDir() {
+		return filepath.Join(root, entries[0].Name()), nil
+	}
+	return root, nil
+}
+
+func directoryHasEntries(path string) (bool, error) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false, err
+	}
+	return len(entries) > 0, nil
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
+}
+
+func extractTar(r io.Reader, destination string) error {
+	const (
+		maxExtractedBytes     int64 = 4 << 30
+		maxExtractedFileBytes int64 = 1 << 30
+	)
+
+	var extractedBytes int64
+	tr := tar.NewReader(r)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if header.Size < 0 {
+			return fmt.Errorf("invalid negative size for archive entry %s", header.Name)
+		}
+		if header.Size > maxExtractedFileBytes {
+			return fmt.Errorf("archive entry too large: %s", header.Name)
+		}
+		if extractedBytes+header.Size > maxExtractedBytes {
+			return fmt.Errorf("archive total extracted size exceeds limit")
+		}
+		// Archive paths are validated against destination immediately below.
+		//nolint:gosec // G305
+		targetPath := filepath.Join(destination, header.Name)
+		cleanDestination := filepath.Clean(destination) + string(os.PathSeparator)
+		cleanTarget := filepath.Clean(targetPath)
+		if cleanTarget != filepath.Clean(destination) && !strings.HasPrefix(cleanTarget, cleanDestination) {
+			return fmt.Errorf("archive path traversal detected: %s", header.Name)
+		}
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(cleanTarget, 0o750); err != nil {
+				return err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(cleanTarget), 0o750); err != nil {
+				return err
+			}
+			out, err := os.OpenFile(cleanTarget, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+			if err != nil {
+				return err
+			}
+			written, err := io.CopyN(out, tr, header.Size)
+			if err != nil {
+				_ = out.Close()
+				return err
+			}
+			if err := out.Close(); err != nil {
+				return err
+			}
+			if written != header.Size {
+				return fmt.Errorf("short write for archive entry %s", header.Name)
+			}
+			extractedBytes += written
+
+			mode := secureArchiveFileMode(header.FileInfo().Mode(), false)
+			if err := os.Chmod(cleanTarget, mode); err != nil { //nolint:gosec // G302: mode sanitized to max 0750.
+				return err
+			}
+		default:
+			// Skip unsupported entry types for now.
+		}
+	}
+}
+
+func secureArchiveFileMode(raw os.FileMode, isDir bool) os.FileMode {
+	perm := raw & 0o777
+	perm &= 0o750
+	if isDir {
+		if perm&0o700 == 0 {
+			perm |= 0o700
+		}
+		return perm
+	}
+	if perm&0o600 == 0 {
+		perm |= 0o600
+	}
+	return perm
+}
+
+func renderRuntimeSystemdUnit(opts Options, componentName string, component RuntimeComponentLock) string {
+	unit := component.Systemd
+	desc := strings.TrimSpace(unit.Description)
+	if desc == "" {
+		desc = "aiPanel runtime " + componentName
+	}
+	serviceType := strings.TrimSpace(unit.Type)
+	if serviceType == "" {
+		serviceType = "simple"
+	}
+	workingDir := strings.TrimSpace(unit.WorkingDirectory)
+	if workingDir == "" {
+		workingDir = "/"
+	}
+	execStart := renderRuntimePlaceholder(unit.ExecStart, opts, componentName, component.Version)
+	execReload := renderRuntimePlaceholder(unit.ExecReload, opts, componentName, component.Version)
+	execStop := renderRuntimePlaceholder(unit.ExecStop, opts, componentName, component.Version)
+
+	after := append([]string(nil), unit.After...)
+	if len(after) == 0 {
+		after = []string{"network-online.target"}
+	}
+	wants := append([]string(nil), unit.Wants...)
+	if len(wants) == 0 {
+		wants = []string{"network-online.target"}
+	}
+
+	lines := []string{
+		"[Unit]",
+		"Description=" + desc,
+		"After=" + strings.Join(after, " "),
+		"Wants=" + strings.Join(wants, " "),
+		"",
+		"[Service]",
+		"Type=" + serviceType,
+		"User=root",
+		"Group=root",
+		"WorkingDirectory=" + workingDir,
+		"ExecStart=" + execStart,
+		"Restart=on-failure",
+		"RestartSec=2",
+	}
+	if componentName == "php-fpm" {
+		lines = append(lines, "RuntimeDirectory=php")
+	}
+	if strings.TrimSpace(execReload) != "" {
+		lines = append(lines, "ExecReload="+execReload)
+	}
+	if strings.TrimSpace(execStop) != "" {
+		lines = append(lines, "ExecStop="+execStop)
+	}
+	lines = append(lines,
+		"",
+		"[Install]",
+		"WantedBy=multi-user.target",
+		"",
+	)
+	return strings.Join(lines, "\n")
+}
+
+func renderRuntimePlaceholder(in string, opts Options, component, version string) string {
+	installDir := filepath.Join(strings.TrimSpace(opts.RuntimeInstallDir), strings.TrimSpace(component), strings.TrimSpace(version))
+	replacer := strings.NewReplacer(
+		"{{runtime_dir}}", strings.TrimSpace(opts.RuntimeInstallDir),
+		"{{component}}", strings.TrimSpace(component),
+		"{{version}}", strings.TrimSpace(version),
+		"{{install_dir}}", installDir,
+	)
+	return replacer.Replace(strings.TrimSpace(in))
+}
+
+func renderRuntimeBuildCommand(opts Options, component, version, command string) string {
+	return renderRuntimePlaceholder(command, opts, component, version)
 }
 
 func (i *Installer) prepareDirectories(_ context.Context) error {
@@ -439,6 +1393,9 @@ func (i *Installer) prepareDirectories(_ context.Context) error {
 		filepath.Dir(i.opts.StateFilePath):   {},
 		filepath.Dir(i.opts.ReportFilePath):  {},
 		filepath.Dir(i.opts.LogFilePath):     {},
+	}
+	if isRuntimeSourceMode(i.opts.InstallMode) {
+		dirs[i.opts.RuntimeInstallDir] = struct{}{}
 	}
 	for dir := range dirs {
 		if strings.TrimSpace(dir) == "" || dir == "." {
@@ -531,10 +1488,8 @@ func (i *Installer) createServiceUser(ctx context.Context) error {
 	return nil
 }
 
-func (i *Installer) installNginx(ctx context.Context) error {
-	if err := systemd.EnableNow(ctx, i.runner, "nginx"); err != nil {
-		return fmt.Errorf("start nginx: %w", err)
-	}
+func (i *Installer) installNginx(_ context.Context) error {
+	i.logf("[install_nginx] skipped in source-build mode")
 	return nil
 }
 
@@ -547,6 +1502,9 @@ func (i *Installer) initDatabases(ctx context.Context) error {
 }
 
 func (i *Installer) configureNginx(ctx context.Context) error {
+	if err := i.ensureRuntimeNginxConfig(); err != nil {
+		return err
+	}
 	panelPort := parsePort(i.opts.Addr, "8080")
 	panelContent, err := renderTemplateWithFallback(
 		i.opts.PanelVhostTemplatePath,
@@ -614,7 +1572,15 @@ func (i *Installer) configureNginx(ctx context.Context) error {
 }
 
 func (i *Installer) configurePHPFPM(ctx context.Context) error {
-	versions := []string{"8.3", "8.4"}
+	version, err := i.runtimePHPMajorMinorVersion(ctx)
+	if err != nil {
+		return err
+	}
+	if version == "" {
+		i.logf("[configure_phpfpm] runtime php-fpm component not declared in lock")
+		return nil
+	}
+	versions := []string{version}
 	for _, version := range versions {
 		path := filepath.Join(i.opts.PHPBaseDir, version, "fpm", "pool.d", "aipanel-default.conf")
 		content := fmt.Sprintf(phpPoolTemplate, version, version)
@@ -690,14 +1656,8 @@ func (i *Installer) runHealthcheck(ctx context.Context) error {
 	if i.opts.SkipHealthcheck {
 		return nil
 	}
-	for _, unit := range []string{"nginx", "php8.3-fpm", "php8.4-fpm", "mariadb"} {
-		active, err := systemd.IsActive(ctx, i.runner, unit)
-		if err != nil {
-			return fmt.Errorf("check %s status: %w", unit, err)
-		}
-		if !active {
-			return fmt.Errorf("%s is not active", unit)
-		}
+	if err := i.checkRuntimeUnitsHealth(ctx); err != nil {
+		return err
 	}
 
 	hctx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -731,6 +1691,38 @@ func (i *Installer) runHealthcheck(ctx context.Context) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+func (i *Installer) checkRuntimeUnitsHealth(ctx context.Context) error {
+	lock, err := i.resolveRuntimeSourceLock(ctx)
+	if err != nil {
+		return err
+	}
+	channel, err := i.runtimeChannel(lock)
+	if err != nil {
+		return err
+	}
+	unitNames := make([]string, 0, len(channel))
+	for _, component := range channel {
+		name := strings.TrimSpace(component.Systemd.Name)
+		if name != "" {
+			unitNames = append(unitNames, name)
+		}
+	}
+	sort.Strings(unitNames)
+	if len(unitNames) == 0 {
+		return nil
+	}
+	for _, unit := range unitNames {
+		active, err := systemd.IsActive(ctx, i.runner, unit)
+		if err != nil {
+			return fmt.Errorf("check %s status: %w", unit, err)
+		}
+		if !active {
+			return fmt.Errorf("%s is not active", unit)
+		}
+	}
+	return nil
 }
 
 func (i *Installer) loadState() (*checkpointState, error) {
@@ -776,18 +1768,29 @@ func (i *Installer) writeReport(report *Report) error {
 }
 
 func (i *Installer) logf(format string, args ...any) {
-	if strings.TrimSpace(i.opts.LogFilePath) == "" {
-		return
+	ts := i.now().UTC().Format(time.RFC3339)
+	message := fmt.Sprintf(format, args...)
+	lines := strings.Split(strings.TrimSuffix(message, "\n"), "\n")
+
+	var file io.Writer
+	if strings.TrimSpace(i.opts.LogFilePath) != "" {
+		_ = os.MkdirAll(filepath.Dir(i.opts.LogFilePath), 0o750)
+		f, err := os.OpenFile(i.opts.LogFilePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		if err == nil {
+			defer func() {
+				_ = f.Close()
+			}()
+			file = f
+		}
 	}
-	_ = os.MkdirAll(filepath.Dir(i.opts.LogFilePath), 0o750)
-	f, err := os.OpenFile(i.opts.LogFilePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		return
+
+	for _, line := range lines {
+		entry := fmt.Sprintf("%s %s\n", ts, line)
+		_, _ = os.Stderr.WriteString(entry)
+		if file != nil {
+			_, _ = io.WriteString(file, entry)
+		}
 	}
-	defer func() {
-		_ = f.Close()
-	}()
-	_, _ = fmt.Fprintf(f, "%s %s\n", i.now().UTC().Format(time.RFC3339), fmt.Sprintf(format, args...))
 }
 
 func parseOSRelease(path string) (map[string]string, error) {
@@ -956,6 +1959,37 @@ const defaultCatchallTemplate = `server {
     server_name _;
     return 444;
 }
+`
+
+const sourceRuntimeNginxConf = `worker_processes auto;
+pid /run/nginx.pid;
+error_log /var/log/nginx/error.log warn;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include mime.types;
+    default_type application/octet-stream;
+    sendfile on;
+    keepalive_timeout 65;
+    client_body_temp_path /var/lib/nginx/body;
+    proxy_temp_path /var/lib/nginx/proxy;
+    fastcgi_temp_path /var/lib/nginx/fastcgi;
+    uwsgi_temp_path /var/lib/nginx/uwsgi;
+    scgi_temp_path /var/lib/nginx/scgi;
+    include /etc/nginx/conf.d/*.conf;
+    include /etc/nginx/sites-enabled/*.conf;
+}
+`
+
+const sourceRuntimeFastCGIPHPConf = `fastcgi_split_path_info ^(.+\.php)(/.+)$;
+try_files $fastcgi_script_name =404;
+set $path_info $fastcgi_path_info;
+fastcgi_param PATH_INFO $path_info;
+fastcgi_index index.php;
+include fastcgi.conf;
 `
 
 // phpPoolTemplate uses two %s verb slots: PHP version for pool name and socket path.

@@ -2,22 +2,24 @@
 package steps
 
 const (
-	Preflight      = "preflight"
-	SystemUpdate   = "system_update"
-	AddRepos       = "add_repositories"
-	InstallPkgs    = "install_packages"
-	PrepareDirs    = "prepare_dirs"
-	CopyBinary     = "copy_binary"
-	WriteConfig    = "write_config"
-	CreateUser     = "create_service_user"
-	InstallNginx   = "install_nginx"
-	InitDatabases  = "init_databases"
-	ConfigureNginx = "configure_nginx"
-	ConfigurePHP   = "configure_phpfpm"
-	WriteUnit      = "write_systemd_unit"
-	StartPanel     = "start_panel_service"
-	CreateAdmin    = "create_admin"
-	Healthcheck    = "healthcheck"
+	Preflight       = "preflight"
+	SystemUpdate    = "system_update"
+	AddRepos        = "add_repositories"
+	InstallPkgs     = "install_packages"
+	PrepareDirs     = "prepare_dirs"
+	InstallRuntime  = "install_runtime"
+	ActivateRuntime = "activate_runtime_services"
+	CopyBinary      = "copy_binary"
+	WriteConfig     = "write_config"
+	CreateUser      = "create_service_user"
+	InstallNginx    = "install_nginx"
+	InitDatabases   = "init_databases"
+	ConfigureNginx  = "configure_nginx"
+	ConfigurePHP    = "configure_phpfpm"
+	WriteUnit       = "write_systemd_unit"
+	StartPanel      = "start_panel_service"
+	CreateAdmin     = "create_admin"
+	Healthcheck     = "healthcheck"
 )
 
 // Ordered defines installer step execution sequence for phase 2.
@@ -27,6 +29,8 @@ var Ordered = []string{
 	AddRepos,
 	InstallPkgs,
 	PrepareDirs,
+	InstallRuntime,
+	ActivateRuntime,
 	CopyBinary,
 	WriteConfig,
 	CreateUser,

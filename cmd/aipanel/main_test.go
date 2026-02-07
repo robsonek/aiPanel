@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -100,5 +101,58 @@ func TestNewHandler_ProtectsAPI(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+}
+
+func TestIsHelpArg(t *testing.T) {
+	tests := map[string]bool{
+		"-h":     true,
+		"--help": true,
+		"help":   true,
+		"serve":  false,
+		"":       false,
+	}
+	for arg, want := range tests {
+		if got := isHelpArg(arg); got != want {
+			t.Fatalf("isHelpArg(%q)=%v want %v", arg, got, want)
+		}
+	}
+}
+
+func TestMissingTools(t *testing.T) {
+	originalLookup := lookupCommandPath
+	defer func() { lookupCommandPath = originalLookup }()
+
+	lookupCommandPath = func(name string) (string, error) {
+		if name == "sqlite3" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + name, nil
+	}
+
+	missing := missingTools([]string{"bash", "sqlite3", ""})
+	if len(missing) != 1 || missing[0] != "sqlite3" {
+		t.Fatalf("unexpected missing tools: %v", missing)
+	}
+}
+
+func TestEnsureRequiredTools(t *testing.T) {
+	originalLookup := lookupCommandPath
+	defer func() { lookupCommandPath = originalLookup }()
+
+	lookupCommandPath = func(name string) (string, error) {
+		return "", errors.New("not found")
+	}
+
+	err := ensureRequiredTools("serve", []string{"sqlite3", "gnupg"})
+	if err == nil {
+		t.Fatal("expected missing tools error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "missing required system tools for serve:") {
+		t.Fatalf("unexpected error message: %s", msg)
+	}
+	if !strings.Contains(msg, "install with: sudo apt-get update && sudo apt-get install -y") {
+		t.Fatalf("expected install hint in error message: %s", msg)
 	}
 }

@@ -1,0 +1,11 @@
+# Upstream component sources used by aiPanel source-build runtime installer.
+components:
+  nginx:
+    upstream: "https://nginx.org/download/"
+    signature_key: "nginx_signing_key"
+  php-fpm:
+    upstream: "https://www.php.net/distributions/"
+    signature_key: "php_release_managers"
+  mariadb:
+    upstream: "https://archive.mariadb.org/"
+    signature_key: "mariadb_release_signing_key"

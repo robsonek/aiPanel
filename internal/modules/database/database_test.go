@@ -112,3 +112,30 @@ func TestService_CreateDatabaseRollbackOnCreateUserFailure(t *testing.T) {
 		t.Fatalf("expected db rollback call, got %+v", mariadb.dropDBCalls)
 	}
 }
+
+func TestService_CreateDatabaseNormalizesName(t *testing.T) {
+	ctx := context.Background()
+	store := sqlite.New(t.TempDir())
+	if err := store.Init(ctx); err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+	if err := store.ExecPanel(ctx, "INSERT INTO sites(domain, root_dir, php_version, system_user, status, created_at, updated_at) VALUES('test.example.com','/var/www/test.example.com/public_html','8.3','site_test','active',1,1);"); err != nil {
+		t.Fatalf("seed site: %v", err)
+	}
+	mariadb := &fakeMariaDB{}
+	svc := NewService(store, config.Config{}, slog.Default(), mariadb)
+
+	res, err := svc.CreateDatabase(ctx, CreateDatabaseRequest{
+		SiteID: 1,
+		DBName: "fhdfgh.com-prod",
+	})
+	if err != nil {
+		t.Fatalf("create db: %v", err)
+	}
+	if res.Database.DBName != "fhdfgh_com_prod" {
+		t.Fatalf("expected normalized db name, got %q", res.Database.DBName)
+	}
+	if len(mariadb.createDBCalls) != 1 || mariadb.createDBCalls[0] != "fhdfgh_com_prod" {
+		t.Fatalf("unexpected create db calls: %+v", mariadb.createDBCalls)
+	}
+}

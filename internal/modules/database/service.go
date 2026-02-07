@@ -52,9 +52,9 @@ func (s *Service) CreateDatabase(ctx context.Context, req CreateDatabaseRequest)
 	if req.SiteID <= 0 {
 		return CreateDatabaseResult{}, fmt.Errorf("site_id is required")
 	}
-	dbName := strings.TrimSpace(req.DBName)
-	if !databaseNamePattern.MatchString(dbName) {
-		return CreateDatabaseResult{}, fmt.Errorf("invalid database name")
+	dbName, err := normalizeDatabaseName(req.DBName)
+	if err != nil {
+		return CreateDatabaseResult{}, err
 	}
 	if exists, err := s.siteExists(ctx, req.SiteID); err != nil {
 		return CreateDatabaseResult{}, err
@@ -110,6 +110,35 @@ VALUES(%d,'%s','%s','mariadb',%d);`,
 		Database: db,
 		Password: password,
 	}, nil
+}
+
+func normalizeDatabaseName(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", fmt.Errorf("invalid database name")
+	}
+	value = strings.Map(func(r rune) rune {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_':
+			return r
+		case r == '-' || r == '.' || r == ' ':
+			return '_'
+		default:
+			return '_'
+		}
+	}, value)
+	value = strings.TrimSpace(value)
+	value = strings.Trim(value, "_")
+	for strings.Contains(value, "__") {
+		value = strings.ReplaceAll(value, "__", "_")
+	}
+	if len(value) > 64 {
+		value = value[:64]
+	}
+	if !databaseNamePattern.MatchString(value) {
+		return "", fmt.Errorf("invalid database name")
+	}
+	return value, nil
 }
 
 // ListDatabases returns databases for a site.

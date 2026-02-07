@@ -118,6 +118,37 @@ func TestService_CreateSite(t *testing.T) {
 	}
 }
 
+func TestService_CreateSiteUsesLatestInstalledPHPVersionByDefault(t *testing.T) {
+	ctx := context.Background()
+	store := sqlite.New(t.TempDir())
+	if err := store.Init(ctx); err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+	runner := &fakeRunner{
+		errs: map[string]error{
+			"id site_test_example_com": fmt.Errorf("no such user"),
+		},
+	}
+	nginx := &fakeNginxAdapter{}
+	phpfpm := &fakePHPFPMAdapter{versions: []string{"8.4", "8.5"}}
+	svc := NewService(store, config.Config{}, slog.Default(), runner, nginx, phpfpm)
+	svc.webRoot = t.TempDir()
+
+	site, err := svc.CreateSite(ctx, CreateSiteRequest{
+		Domain: "test.example.com",
+		Actor:  "admin@example.com",
+	})
+	if err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+	if site.PHPVersion != "8.5" {
+		t.Fatalf("expected site php version 8.5, got %s", site.PHPVersion)
+	}
+	if len(phpfpm.writeCalls) != 1 || phpfpm.writeCalls[0].PHPVersion != "8.5" {
+		t.Fatalf("expected php-fpm pool write with 8.5, got %+v", phpfpm.writeCalls)
+	}
+}
+
 func TestService_CreateSiteRollbackOnNginxFailure(t *testing.T) {
 	ctx := context.Background()
 	store := sqlite.New(t.TempDir())

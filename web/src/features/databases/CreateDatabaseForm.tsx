@@ -25,10 +25,19 @@ export function CreateDatabaseForm({
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const sanitizeDBName = (value: string) =>
+    value.replace(/[^a-zA-Z0-9_]+/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '')
+
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault()
     if (!selectedSiteID) {
       setError(t('databases.errors.siteRequired'))
+      return
+    }
+    const normalizedName = sanitizeDBName(dbName.trim())
+    if (!normalizedName) {
+      setError(t('databases.errors.createFailed'))
+      setSubmitting(false)
       return
     }
     setSubmitting(true)
@@ -38,7 +47,7 @@ export function CreateDatabaseForm({
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ db_name: dbName.trim() }),
+        body: JSON.stringify({ db_name: normalizedName }),
       })
       if (!res.ok) {
         const message = await res.text()
@@ -79,8 +88,9 @@ export function CreateDatabaseForm({
         <input
           className="w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
           value={dbName}
-          onChange={(e) => setDBName(e.target.value)}
+          onChange={(e) => setDBName(sanitizeDBName(e.target.value))}
           placeholder={t('databases.create.dbNamePlaceholder')}
+          maxLength={64}
           required
         />
       </label>

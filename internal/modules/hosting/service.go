@@ -23,6 +23,8 @@ var (
 	ErrSiteNotFound = errors.New("site not found")
 )
 
+const defaultPHPVersion = "8.5"
+
 // Service orchestrates site CRUD against adapters and panel.db.
 type Service struct {
 	store   *sqlite.Store
@@ -70,17 +72,22 @@ func (s *Service) CreateSite(ctx context.Context, req CreateSiteRequest) (Site, 
 	if err != nil {
 		return Site{}, err
 	}
-	phpVersion := strings.TrimSpace(req.PHPVersion)
-	if phpVersion == "" {
-		phpVersion = "8.3"
-	}
-	if !phpVersionPattern.MatchString(phpVersion) {
-		return Site{}, fmt.Errorf("invalid php version")
-	}
-
 	versions, err := s.phpfpm.ListVersions(ctx)
 	if err != nil {
 		return Site{}, fmt.Errorf("list php versions: %w", err)
+	}
+	phpVersion := strings.TrimSpace(req.PHPVersion)
+	if phpVersion == "" {
+		if len(versions) > 0 {
+			availableVersions := slices.Clone(versions)
+			slices.Sort(availableVersions)
+			phpVersion = availableVersions[len(availableVersions)-1]
+		} else {
+			phpVersion = defaultPHPVersion
+		}
+	}
+	if !phpVersionPattern.MatchString(phpVersion) {
+		return Site{}, fmt.Errorf("invalid php version")
 	}
 	if len(versions) > 0 && !slices.Contains(versions, phpVersion) {
 		return Site{}, fmt.Errorf("php version %s is not installed", phpVersion)

@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS sites (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   domain TEXT NOT NULL UNIQUE,
   root_dir TEXT NOT NULL,
-  php_version TEXT NOT NULL DEFAULT '8.3',
+  php_version TEXT NOT NULL DEFAULT '8.5',
   system_user TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active',
   created_at INTEGER NOT NULL,

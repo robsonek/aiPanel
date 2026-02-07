@@ -43,7 +43,7 @@ func (h *Handler) HandleSiteDatabases(w http.ResponseWriter, r *http.Request, si
 			Actor:  actor,
 		})
 		if err != nil {
-			if strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "not found") {
+			if isCreateDatabaseBadRequest(err) {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
@@ -95,4 +95,16 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func isCreateDatabaseBadRequest(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch strings.TrimSpace(err.Error()) {
+	case "site_id is required", "invalid database name", "site not found":
+		return true
+	default:
+		return false
+	}
 }

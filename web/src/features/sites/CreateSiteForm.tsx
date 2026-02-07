@@ -9,7 +9,7 @@ type CreateSiteFormProps = {
 export function CreateSiteForm({ onCreated }: CreateSiteFormProps) {
   const { t } = useTranslation()
   const [domain, setDomain] = useState('')
-  const [phpVersion, setPHPVersion] = useState('8.3')
+  const [phpVersion, setPHPVersion] = useState('8.5')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -33,7 +33,7 @@ export function CreateSiteForm({ onCreated }: CreateSiteFormProps) {
         return
       }
       setDomain('')
-      setPHPVersion('8.3')
+      setPHPVersion('8.5')
       onCreated()
     } catch {
       setError(t('errors.network'))
@@ -62,8 +62,7 @@ export function CreateSiteForm({ onCreated }: CreateSiteFormProps) {
           value={phpVersion}
           onChange={(e) => setPHPVersion(e.target.value)}
         >
-          <option value="8.3">8.3</option>
-          <option value="8.4">8.4</option>
+          <option value="8.5">8.5</option>
         </select>
       </label>
       {error ? (
