@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
@@ -1868,16 +1869,25 @@ func freeDiskGB(rootPath string) (int, error) {
 	if err := syscall.Statfs(rootPath, &stat); err != nil {
 		return 0, err
 	}
-	if stat.Bavail <= 0 {
+	bavail, ok := new(big.Int).SetString(fmt.Sprint(stat.Bavail), 10)
+	if !ok || bavail.Sign() <= 0 {
 		return 0, nil
 	}
-	free := uint64(stat.Bavail) * uint64(stat.Bsize)
-	gb := free / (1024 * 1024 * 1024)
-	maxInt := uint64(^uint(0) >> 1)
-	if gb > maxInt {
+	bsize, ok := new(big.Int).SetString(fmt.Sprint(stat.Bsize), 10)
+	if !ok || bsize.Sign() <= 0 {
+		return 0, nil
+	}
+
+	freeBytes := new(big.Int).Mul(bavail, bsize)
+	bytesPerGB := big.NewInt(1024 * 1024 * 1024)
+	gb := new(big.Int).Div(freeBytes, bytesPerGB)
+
+	maxInt := int64(^uint(0) >> 1)
+	maxIntBig := big.NewInt(maxInt)
+	if gb.Cmp(maxIntBig) > 0 {
 		return int(maxInt), nil
 	}
-	return int(gb), nil
+	return int(gb.Int64()), nil
 }
 
 func healthURL(addr string) string {
