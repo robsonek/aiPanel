@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/robsonek/aiPanel/internal/installer"
 	"github.com/robsonek/aiPanel/internal/modules/iam"
 	"github.com/robsonek/aiPanel/internal/platform/config"
 	"github.com/robsonek/aiPanel/internal/platform/logger"
@@ -154,5 +156,75 @@ func TestEnsureRequiredTools(t *testing.T) {
 	}
 	if !strings.Contains(msg, "install with: sudo apt-get update && sudo apt-get install -y") {
 		t.Fatalf("expected install hint in error message: %s", msg)
+	}
+}
+
+func TestPromptInstallOptions_UsesDefaults(t *testing.T) {
+	defaults := installer.DefaultOptions()
+	input := "\n\n"
+	out := &bytes.Buffer{}
+
+	opts, dryRun, err := promptInstallOptions(defaults, strings.NewReader(input), out)
+	if err != nil {
+		t.Fatalf("promptInstallOptions error: %v", err)
+	}
+	if dryRun {
+		t.Fatal("expected dryRun=false by default")
+	}
+	if opts.Addr != defaults.Addr {
+		t.Fatalf("addr mismatch: got %q want %q", opts.Addr, defaults.Addr)
+	}
+	if opts.RuntimeChannel != defaults.RuntimeChannel {
+		t.Fatalf("runtime channel mismatch: got %q want %q", opts.RuntimeChannel, defaults.RuntimeChannel)
+	}
+	if !opts.VerifyUpstreamSources {
+		t.Fatal("expected VerifyUpstreamSources=true")
+	}
+}
+
+func TestPromptInstallOptions_Cancel(t *testing.T) {
+	defaults := installer.DefaultOptions()
+	input := "\nn\n"
+
+	_, _, err := promptInstallOptions(defaults, strings.NewReader(input), &bytes.Buffer{})
+	if !errors.Is(err, errInstallCancelled) {
+		t.Fatalf("expected errInstallCancelled, got %v", err)
+	}
+}
+
+func TestPromptInstallOptions_CustomMode(t *testing.T) {
+	defaults := installer.DefaultOptions()
+	input := strings.Join([]string{
+		"n",
+		":18080",
+		"ops@example.com",
+		"VeryStrongPass123!",
+		"edge",
+		"n",
+		"y",
+	}, "\n") + "\n"
+	out := &bytes.Buffer{}
+
+	opts, dryRun, err := promptInstallOptions(defaults, strings.NewReader(input), out)
+	if err != nil {
+		t.Fatalf("promptInstallOptions error: %v", err)
+	}
+	if dryRun {
+		t.Fatal("expected dryRun=false")
+	}
+	if opts.Addr != ":18080" {
+		t.Fatalf("addr mismatch: got %q", opts.Addr)
+	}
+	if opts.AdminEmail != "ops@example.com" {
+		t.Fatalf("admin email mismatch: got %q", opts.AdminEmail)
+	}
+	if opts.AdminPassword != "VeryStrongPass123!" {
+		t.Fatalf("admin password mismatch: got %q", opts.AdminPassword)
+	}
+	if opts.RuntimeChannel != "edge" {
+		t.Fatalf("runtime channel mismatch: got %q", opts.RuntimeChannel)
+	}
+	if opts.RuntimeManifestURL != defaults.RuntimeManifestURL {
+		t.Fatalf("runtime manifest should stay default, got %q", opts.RuntimeManifestURL)
 	}
 }
