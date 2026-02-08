@@ -386,9 +386,11 @@ func runtimeComponentFromAlias(alias string) (string, bool) {
 		return "nginx", true
 	case "php", "php-fpm", "phpfpm":
 		return "php-fpm", true
-	case "mysql", "mariadb":
+	case "mysql":
+		return "mysql", true
+	case "mariadb":
 		return "mariadb", true
-	case "postgres", "postgresql":
+	case "postgresql":
 		return "postgresql", true
 	default:
 		return "", false
@@ -617,9 +619,12 @@ func (i *Installer) Run(ctx context.Context) (*Report, error) {
 			runErr = parseErr
 		} else if runtimeAlias {
 			scope := strings.Join(runtimeComponents, ",")
-			runErr = execStep(steps.InstallRuntime+"["+scope+"]", func(stepCtx context.Context) error {
-				return i.installRuntimeArtifactsSelected(stepCtx, runtimeComponents)
-			}, true)
+			runErr = execStep(steps.InstallPkgs+"["+scope+"]", i.installPackages, true)
+			if runErr == nil {
+				runErr = execStep(steps.InstallRuntime+"["+scope+"]", func(stepCtx context.Context) error {
+					return i.installRuntimeArtifactsSelected(stepCtx, runtimeComponents)
+				}, true)
+			}
 			if runErr == nil {
 				runErr = execStep(steps.ActivateRuntime+"["+scope+"]", func(stepCtx context.Context) error {
 					return i.activateRuntimeServicesSelected(stepCtx, runtimeComponents)
@@ -713,6 +718,7 @@ func (i *Installer) installPackages(ctx context.Context) error {
 		"ca-certificates",
 		"cmake",
 		"gnupg",
+		"libicu-dev",
 		"libonig-dev",
 		"libncurses-dev",
 		"libpcre2-dev",

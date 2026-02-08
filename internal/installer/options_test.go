@@ -116,7 +116,7 @@ func TestOptionsValidate(t *testing.T) {
 
 	t.Run("runtime service aliases are valid in only mode", func(t *testing.T) {
 		opts := DefaultOptions()
-		opts.OnlyStep = "postgres,mysql,php,nginx"
+		opts.OnlyStep = "postgresql,mysql,php,nginx"
 		if err := opts.validate(); err != nil {
 			t.Fatalf("expected runtime service aliases to be valid, got %v", err)
 		}
@@ -124,12 +124,28 @@ func TestOptionsValidate(t *testing.T) {
 
 	t.Run("runtime service aliases require runtime lock", func(t *testing.T) {
 		opts := DefaultOptions()
-		opts.OnlyStep = "postgres"
+		opts.OnlyStep = "postgresql"
 		opts.RuntimeLockPath = ""
 		opts.RuntimeManifestURL = ""
 		err := opts.validate()
 		if err == nil || !strings.Contains(err.Error(), "requires runtime lock path or runtime manifest URL") {
 			t.Fatalf("expected runtime lock requirement for runtime alias, got %v", err)
+		}
+	})
+
+	t.Run("mysql and mariadb aliases are distinct", func(t *testing.T) {
+		components, runtimeAlias, err := parseRuntimeOnlyComponents("mysql,mariadb")
+		if err != nil {
+			t.Fatalf("expected mysql and mariadb aliases to parse, got %v", err)
+		}
+		if !runtimeAlias {
+			t.Fatal("expected runtime alias mode")
+		}
+		if len(components) != 2 {
+			t.Fatalf("expected 2 distinct components, got %+v", components)
+		}
+		if components[0] != "mariadb" || components[1] != "mysql" {
+			t.Fatalf("unexpected parsed runtime components: %+v", components)
 		}
 	})
 }

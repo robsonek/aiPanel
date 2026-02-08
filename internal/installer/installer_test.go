@@ -645,7 +645,7 @@ func TestInstallerRun_OnlyRuntimeServiceAliasInstallsSelectedComponent(t *testin
 	}
 
 	opts := DefaultOptions()
-	opts.OnlyStep = "postgres"
+	opts.OnlyStep = "postgresql"
 	opts.RootFSPath = root
 	opts.InstallMode = InstallModeSourceBuild
 	opts.RuntimeChannel = RuntimeChannelStable
@@ -667,8 +667,11 @@ func TestInstallerRun_OnlyRuntimeServiceAliasInstallsSelectedComponent(t *testin
 	if report.Status != "ok" {
 		t.Fatalf("expected report status ok, got %q", report.Status)
 	}
-	if len(report.Steps) != 2 {
-		t.Fatalf("expected two runtime alias steps, got %d", len(report.Steps))
+	if len(report.Steps) != 3 {
+		t.Fatalf("expected three runtime alias steps, got %d", len(report.Steps))
+	}
+	if report.Steps[0].Name != steps.InstallPkgs+"[postgresql]" {
+		t.Fatalf("expected first alias step %s, got %s", steps.InstallPkgs+"[postgresql]", report.Steps[0].Name)
 	}
 
 	postgresPath := filepath.Join(opts.RuntimeInstallDir, "postgresql", "18.1", "bin", "psql")
@@ -685,7 +688,7 @@ func TestInstallerRun_OnlyRuntimeServiceAliasInstallsSelectedComponent(t *testin
 		t.Fatalf("expected enable postgresql runtime unit, got:\n%s", joined)
 	}
 	if strings.Contains(joined, "aipanel-runtime-nginx.service") {
-		t.Fatalf("did not expect nginx runtime activation in postgres-only mode, got:\n%s", joined)
+		t.Fatalf("did not expect nginx runtime activation in postgresql-only mode, got:\n%s", joined)
 	}
 }
 
