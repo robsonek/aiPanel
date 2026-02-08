@@ -36,6 +36,8 @@ import (
 	"github.com/robsonek/aiPanel/internal/platform/systemd"
 )
 
+const MinAdminPasswordLength = 10
+
 // Options controls installer behavior.
 type Options struct {
 	Addr                  string
@@ -245,6 +247,9 @@ func (o Options) validate() error {
 	}
 	if isRuntimeSourceMode(mode) && strings.TrimSpace(o.RuntimeInstallDir) == "" {
 		return fmt.Errorf("%s mode requires runtime install dir", mode)
+	}
+	if len(strings.TrimSpace(o.AdminPassword)) < MinAdminPasswordLength {
+		return fmt.Errorf("admin password must be at least %d characters", MinAdminPasswordLength)
 	}
 	if o.ReverseProxy && strings.TrimSpace(o.PanelDomain) == "" {
 		return fmt.Errorf("panel domain is required when reverse proxy is enabled")

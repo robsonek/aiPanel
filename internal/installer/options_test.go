@@ -51,6 +51,15 @@ func TestOptionsValidate(t *testing.T) {
 			t.Fatalf("expected reverse proxy panel domain validation error, got %v", err)
 		}
 	})
+
+	t.Run("admin password must meet minimum length", func(t *testing.T) {
+		opts := DefaultOptions()
+		opts.AdminPassword = "short"
+		err := opts.validate()
+		if err == nil || !strings.Contains(err.Error(), "admin password must be at least") {
+			t.Fatalf("expected admin password length validation error, got %v", err)
+		}
+	})
 }
 
 func TestOptionsWithDefaults(t *testing.T) {

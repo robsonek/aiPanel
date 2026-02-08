@@ -237,6 +237,48 @@ func TestPromptInstallOptions_CustomMode(t *testing.T) {
 	}
 }
 
+func TestPromptInstallOptions_CustomModeRePromptsShortPassword(t *testing.T) {
+	defaults := installer.DefaultOptions()
+	input := strings.Join([]string{
+		"n",
+		":18080",
+		"ops@example.com",
+		"short",
+		"VeryStrongPass123!",
+		"stable",
+		"n",
+		"n",
+		"y",
+	}, "\n") + "\n"
+	out := &bytes.Buffer{}
+
+	opts, dryRun, err := promptInstallOptions(defaults, strings.NewReader(input), out)
+	if err != nil {
+		t.Fatalf("promptInstallOptions error: %v", err)
+	}
+	if dryRun {
+		t.Fatal("expected dryRun=false")
+	}
+	if opts.AdminPassword != "VeryStrongPass123!" {
+		t.Fatalf("admin password mismatch: got %q", opts.AdminPassword)
+	}
+	if !strings.Contains(out.String(), "admin password must be at least") {
+		t.Fatalf("expected validation message in output, got: %q", out.String())
+	}
+}
+
+func TestInstallFlagValuesToOptions_RejectsShortAdminPassword(t *testing.T) {
+	defaults := installer.DefaultOptions()
+	fs, values := newInstallFlagSet(defaults)
+	if err := fs.Parse([]string{"--admin-password", "short"}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+	_, _, err := values.toOptions(defaults)
+	if err == nil || !strings.Contains(err.Error(), "admin password must be at least") {
+		t.Fatalf("expected short password validation error, got %v", err)
+	}
+}
+
 func TestApplyReverseProxySettings_RequiresDomain(t *testing.T) {
 	opts := installer.DefaultOptions()
 	err := applyReverseProxySettings(&opts, true, "")

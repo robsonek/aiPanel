@@ -38,6 +38,7 @@ func newHandler(
 }
 
 var lookupCommandPath = exec.LookPath
+const minAdminPasswordLength = installer.MinAdminPasswordLength
 
 func main() {
 	args := os.Args[1:]
@@ -307,6 +308,9 @@ func (v *installFlagValues) toOptions(defaults installer.Options) (installer.Opt
 	if err := applyReverseProxySettings(&opts, *v.reverseProxy, strings.TrimSpace(*v.panelDomain)); err != nil {
 		return installer.Options{}, false, err
 	}
+	if err := validateAdminPassword(opts.AdminPassword); err != nil {
+		return installer.Options{}, false, err
+	}
 	opts.VerifyUpstreamSources = true
 	opts.SkipHealthcheck = *v.skipHealthcheck
 	return opts, *v.dryRun, nil
@@ -352,7 +356,7 @@ func promptInstallOptions(defaults installer.Options, in io.Reader, out io.Write
 		if opts.AdminEmail, err = promptString(reader, out, "Initial admin email", defaults.AdminEmail, nonEmptyValidator("admin-email")); err != nil {
 			return installer.Options{}, false, err
 		}
-		if opts.AdminPassword, err = promptString(reader, out, "Initial admin password", defaults.AdminPassword, nonEmptyValidator("admin-password")); err != nil {
+		if opts.AdminPassword, err = promptString(reader, out, "Initial admin password", defaults.AdminPassword, adminPasswordValidator()); err != nil {
 			return installer.Options{}, false, err
 		}
 		if opts.RuntimeChannel, err = promptString(reader, out, "Runtime channel", defaults.RuntimeChannel, allowedValidator("runtime-channel", installer.RuntimeChannelStable, installer.RuntimeChannelEdge)); err != nil {
@@ -430,6 +434,19 @@ func nonEmptyValidator(field string) promptValidator {
 		}
 		return nil
 	}
+}
+
+func adminPasswordValidator() promptValidator {
+	return func(value string) error {
+		return validateAdminPassword(value)
+	}
+}
+
+func validateAdminPassword(password string) error {
+	if len(strings.TrimSpace(password)) < minAdminPasswordLength {
+		return fmt.Errorf("admin password must be at least %d characters", minAdminPasswordLength)
+	}
+	return nil
 }
 
 func allowedValidator(field string, allowed ...string) promptValidator {
