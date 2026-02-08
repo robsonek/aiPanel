@@ -45,6 +45,10 @@ func (h *Handler) HandleSiteDatabases(w http.ResponseWriter, r *http.Request, si
 			Actor:    actor,
 		})
 		if err != nil {
+			if isCreateDatabaseServiceUnavailable(err) {
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+				return
+			}
 			if isCreateDatabaseBadRequest(err) {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
@@ -56,6 +60,20 @@ func (h *Handler) HandleSiteDatabases(w http.ResponseWriter, r *http.Request, si
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// HandleDatabaseEngines serves GET /api/databases/engines.
+func (h *Handler) HandleDatabaseEngines(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	engines, err := h.svc.AvailableEngines(r.Context())
+	if err != nil {
+		http.Error(w, "failed to list database engines", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"engines": engines})
 }
 
 // HandleDatabaseByID serves DELETE /api/databases/{id}.
@@ -109,4 +127,12 @@ func isCreateDatabaseBadRequest(err error) bool {
 	default:
 		return false
 	}
+}
+
+func isCreateDatabaseServiceUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.TrimSpace(strings.ToLower(err.Error()))
+	return strings.Contains(msg, "database engine") && strings.Contains(msg, "unavailable")
 }

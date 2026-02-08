@@ -17,6 +17,8 @@ type fakeMariaDB struct {
 	dropUserCalls   []string
 	failCreateDB    error
 	failCreateUser  error
+	running         *bool
+	failIsRunning   error
 }
 
 func (f *fakeMariaDB) CreateDatabase(_ context.Context, dbName string) error {
@@ -40,6 +42,12 @@ func (f *fakeMariaDB) DropUser(_ context.Context, username string) error {
 }
 
 func (f *fakeMariaDB) IsRunning(_ context.Context) (bool, error) {
+	if f.failIsRunning != nil {
+		return false, f.failIsRunning
+	}
+	if f.running != nil {
+		return *f.running, nil
+	}
 	return true, nil
 }
 
@@ -50,6 +58,8 @@ type fakePostgreSQL struct {
 	dropUserCalls   []string
 	failCreateDB    error
 	failCreateUser  error
+	running         *bool
+	failIsRunning   error
 }
 
 func (f *fakePostgreSQL) CreateDatabase(_ context.Context, dbName string) error {
@@ -73,7 +83,17 @@ func (f *fakePostgreSQL) DropUser(_ context.Context, username string) error {
 }
 
 func (f *fakePostgreSQL) IsRunning(_ context.Context) (bool, error) {
+	if f.failIsRunning != nil {
+		return false, f.failIsRunning
+	}
+	if f.running != nil {
+		return *f.running, nil
+	}
 	return true, nil
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }
 
 func TestService_CreateListDeleteDatabase(t *testing.T) {
@@ -294,5 +314,55 @@ func TestService_CreateDatabaseRejectsInvalidEngine(t *testing.T) {
 	})
 	if err == nil || err.Error() != "invalid database engine" {
 		t.Fatalf("expected invalid engine error, got %v", err)
+	}
+}
+
+func TestService_CreateDatabaseRejectsUnavailableEngine(t *testing.T) {
+	ctx := context.Background()
+	store := sqlite.New(t.TempDir())
+	if err := store.Init(ctx); err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+	if err := store.ExecPanel(ctx, "INSERT INTO sites(domain, root_dir, php_version, system_user, status, created_at, updated_at) VALUES('test.example.com','/var/www/test.example.com/public_html','8.3','site_test','active',1,1);"); err != nil {
+		t.Fatalf("seed site: %v", err)
+	}
+	svc := NewService(
+		store,
+		config.Config{},
+		slog.Default(),
+		&fakeMariaDB{running: boolPtr(true)},
+		&fakePostgreSQL{running: boolPtr(false)},
+	)
+
+	_, err := svc.CreateDatabase(ctx, CreateDatabaseRequest{
+		SiteID:   1,
+		DBName:   "app_db",
+		DBEngine: DBEnginePostgreSQL,
+	})
+	if err == nil || err.Error() != "database engine postgres is unavailable" {
+		t.Fatalf("expected unavailable postgres error, got %v", err)
+	}
+}
+
+func TestService_AvailableEngines(t *testing.T) {
+	ctx := context.Background()
+	store := sqlite.New(t.TempDir())
+	if err := store.Init(ctx); err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+	svc := NewService(
+		store,
+		config.Config{},
+		slog.Default(),
+		&fakeMariaDB{running: boolPtr(true)},
+		&fakePostgreSQL{running: boolPtr(false)},
+	)
+
+	engines, err := svc.AvailableEngines(ctx)
+	if err != nil {
+		t.Fatalf("available engines: %v", err)
+	}
+	if len(engines) != 1 || engines[0] != DBEngineMariaDB {
+		t.Fatalf("expected only mariadb available, got %+v", engines)
 	}
 }

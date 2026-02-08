@@ -125,8 +125,10 @@
       "dbNameLabel": "Database Name",
       "dbNamePlaceholder": "app_db",
       "engineLabel": "Engine",
+      "enginePlaceholder": "No engines available",
       "engineMariaDB": "MariaDB",
       "enginePostgreSQL": "PostgreSQL",
+      "noAvailableEngines": "No running database engine is available on this server.",
       "submit": "Create Database",
       "submitting": "Creating database..."
     },
@@ -135,6 +137,8 @@
     },
     "errors": {
       "siteRequired": "Please select a site.",
+      "engineRequired": "Please select a database engine.",
+      "loadInitFailed": "Failed to load databases module.",
       "loadSitesFailed": "Failed to load sites list.",
       "loadFailed": "Failed to load databases.",
       "createFailed": "Failed to create database.",

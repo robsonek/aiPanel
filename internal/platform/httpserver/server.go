@@ -156,6 +156,10 @@ func NewHandler(
 	}
 
 	if databaseSvc != nil {
+		mux.Handle("/api/databases/engines", requireAdmin(iamSvc, cfg.SessionCookieName, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			databaseHandler.HandleDatabaseEngines(w, r)
+		})))
+
 		mux.Handle("/api/databases/", requireAdmin(iamSvc, cfg.SessionCookieName, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			u, _ := userFromContext(r.Context())
 			id, err := database.ParseDatabaseID(r.URL.Path)

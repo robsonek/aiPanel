@@ -26,3 +26,17 @@ func TestIsCreateDatabaseBadRequest(t *testing.T) {
 		}
 	})
 }
+
+func TestIsCreateDatabaseServiceUnavailable(t *testing.T) {
+	t.Run("engine unavailable error", func(t *testing.T) {
+		if !isCreateDatabaseServiceUnavailable(errors.New("database engine postgres is unavailable")) {
+			t.Fatal("expected engine unavailable error to map to service unavailable")
+		}
+	})
+
+	t.Run("other errors are not service unavailable", func(t *testing.T) {
+		if isCreateDatabaseServiceUnavailable(errors.New("invalid database engine")) {
+			t.Fatal("expected validation error not to map to service unavailable")
+		}
+	})
+}

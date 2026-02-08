@@ -7,6 +7,8 @@ type Site = {
   domain: string
 }
 
+type DatabaseEngine = 'mariadb' | 'postgres'
+
 type Database = {
   id: number
   site_id: number
@@ -19,6 +21,7 @@ type Database = {
 export function DatabasesPage() {
   const { t } = useTranslation()
   const [sites, setSites] = useState<Site[]>([])
+  const [availableEngines, setAvailableEngines] = useState<DatabaseEngine[]>([])
   const [selectedSiteID, setSelectedSiteID] = useState<number | null>(null)
   const [databases, setDatabases] = useState<Database[]>([])
   const [loading, setLoading] = useState(true)
@@ -38,6 +41,18 @@ export function DatabasesPage() {
     } else {
       setSelectedSiteID(null)
     }
+  }, [])
+
+  const loadAvailableEngines = useCallback(async () => {
+    const res = await fetch('/api/databases/engines', { credentials: 'include' })
+    if (!res.ok) {
+      throw new Error()
+    }
+    const payload = (await res.json()) as { engines: string[] }
+    const engines = (payload.engines ?? []).filter((engine): engine is DatabaseEngine =>
+      engine === 'mariadb' || engine === 'postgres',
+    )
+    setAvailableEngines(engines)
   }, [])
 
   const loadDatabases = useCallback(
@@ -64,14 +79,14 @@ export function DatabasesPage() {
     const run = async () => {
       setError(null)
       try {
-        await loadSites()
+        await Promise.all([loadSites(), loadAvailableEngines()])
       } catch {
-        setError(t('databases.errors.loadSitesFailed'))
+        setError(t('databases.errors.loadInitFailed'))
         setLoading(false)
       }
     }
     void run()
-  }, [loadSites, t])
+  }, [loadAvailableEngines, loadSites, t])
 
   useEffect(() => {
     if (!selectedSiteID) {
@@ -107,6 +122,7 @@ export function DatabasesPage() {
     <section className="grid gap-4">
       <CreateDatabaseForm
         sites={sites}
+        availableEngines={availableEngines}
         selectedSiteID={selectedSiteID}
         onSelectSite={setSelectedSiteID}
         onCreated={(password) => {

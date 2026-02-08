@@ -35,6 +35,7 @@ type databaseProvisioner interface {
 	DropDatabase(ctx context.Context, dbName string) error
 	CreateUser(ctx context.Context, username, password, dbName string) error
 	DropUser(ctx context.Context, username string) error
+	IsRunning(ctx context.Context) (bool, error)
 }
 
 // Service orchestrates database engine CRUD and panel metadata persistence.
@@ -92,6 +93,13 @@ func (s *Service) CreateDatabase(ctx context.Context, req CreateDatabaseRequest)
 	if err != nil {
 		return CreateDatabaseResult{}, err
 	}
+	isRunning, err := provisioner.IsRunning(ctx)
+	if err != nil {
+		return CreateDatabaseResult{}, fmt.Errorf("check %s status: %w", engine, err)
+	}
+	if !isRunning {
+		return CreateDatabaseResult{}, fmt.Errorf("database engine %s is unavailable", engine)
+	}
 
 	dbUser := dbUserForName(engine, dbName)
 	password, err := randomHex(12)
@@ -142,6 +150,33 @@ VALUES(%d,'%s','%s','%s',%d);`,
 		Database: db,
 		Password: password,
 	}, nil
+}
+
+// AvailableEngines returns currently running engines configured in the service.
+func (s *Service) AvailableEngines(ctx context.Context) ([]string, error) {
+	if s.store == nil {
+		return nil, fmt.Errorf("database service is not configured")
+	}
+	engines := make([]string, 0, 2)
+	if s.mariadb != nil {
+		ok, err := s.mariadb.IsRunning(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("check %s status: %w", DBEngineMariaDB, err)
+		}
+		if ok {
+			engines = append(engines, DBEngineMariaDB)
+		}
+	}
+	if s.postgresql != nil {
+		ok, err := s.postgresql.IsRunning(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("check %s status: %w", DBEnginePostgreSQL, err)
+		}
+		if ok {
+			engines = append(engines, DBEnginePostgreSQL)
+		}
+	}
+	return engines, nil
 }
 
 func normalizeDatabaseName(raw string) (string, error) {
