@@ -842,7 +842,7 @@ func TestInstallerRun_OnlyInstallPGAdmin(t *testing.T) {
 	if !strings.Contains(joined, "python3 -m venv") {
 		t.Fatalf("expected virtualenv setup command, got:\n%s", joined)
 	}
-	if !strings.Contains(joined, "setup.py setup-db") {
+	if !strings.Contains(joined, "setup-db") {
 		t.Fatalf("expected pgAdmin setup-db command, got:\n%s", joined)
 	}
 	if !strings.Contains(joined, "systemctl enable --now aipanel-pgadmin.service") {

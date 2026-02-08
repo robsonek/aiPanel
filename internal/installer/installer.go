@@ -2569,23 +2569,42 @@ func (i *Installer) installPGAdmin(ctx context.Context) error {
 		return fmt.Errorf("install pgAdmin Python dependencies: %w", err)
 	}
 
-	if _, err := i.runner.Run(ctx, pythonPath, setupPath, "setup-db"); err != nil {
-		return fmt.Errorf("initialize pgAdmin database: %w", err)
-	}
 	adminEmail := strings.TrimSpace(i.opts.AdminEmail)
 	if adminEmail == "" {
 		adminEmail = "admin@example.com"
 	}
 	adminPassword := strings.TrimSpace(i.opts.AdminPassword)
-	if output, err := i.runner.Run(
-		ctx,
-		pythonPath,
-		setupPath,
-		"add-user",
-		adminEmail,
-		adminPassword,
-		"--admin",
-	); err != nil {
+	credsDir, err := os.MkdirTemp("", "aipanel-pgadmin-creds-*")
+	if err != nil {
+		return fmt.Errorf("create pgAdmin credentials directory: %w", err)
+	}
+	defer func() {
+		_ = os.RemoveAll(credsDir)
+	}()
+	emailPath := filepath.Join(credsDir, "email")
+	passwordPath := filepath.Join(credsDir, "password")
+	if err := writeTextFile(emailPath, adminEmail, 0o600); err != nil {
+		return fmt.Errorf("write pgAdmin admin email: %w", err)
+	}
+	if err := writeTextFile(passwordPath, adminPassword, 0o600); err != nil {
+		return fmt.Errorf("write pgAdmin admin password: %w", err)
+	}
+
+	setupDBCmd := strings.Join([]string{
+		"export PGADMIN_SETUP_EMAIL=$(cat " + shellQuote(emailPath) + ")",
+		"export PGADMIN_SETUP_PASSWORD=$(cat " + shellQuote(passwordPath) + ")",
+		shellQuote(pythonPath) + " " + shellQuote(setupPath) + " setup-db",
+	}, " && ")
+	if _, err := i.runner.Run(ctx, "bash", "-lc", setupDBCmd); err != nil {
+		return fmt.Errorf("initialize pgAdmin database: %w", err)
+	}
+
+	addUserCmd := strings.Join([]string{
+		"EMAIL=$(cat " + shellQuote(emailPath) + ")",
+		"PASS=$(cat " + shellQuote(passwordPath) + ")",
+		shellQuote(pythonPath) + " " + shellQuote(setupPath) + " add-user \"$EMAIL\" \"$PASS\" --admin",
+	}, " && ")
+	if output, err := i.runner.Run(ctx, "bash", "-lc", addUserCmd); err != nil {
 		combined := strings.ToLower(strings.TrimSpace(output + "\n" + err.Error()))
 		if !strings.Contains(combined, "already exists") &&
 			!strings.Contains(combined, "already present") &&
