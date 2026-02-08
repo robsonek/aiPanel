@@ -315,8 +315,12 @@ func (o Options) validate() error {
 			return fmt.Errorf("letsencrypt email is required when letsencrypt is enabled")
 		}
 	}
-	if strings.TrimSpace(o.OnlyStep) != "" && !isInstallerStepSupported(o.OnlyStep) {
-		return fmt.Errorf("invalid installer step for --only: %s", o.OnlyStep)
+	if only := strings.TrimSpace(o.OnlyStep); only != "" {
+		if !isInstallerStepSupported(only) {
+			if _, runtimeAlias, err := parseRuntimeOnlyComponents(only); err != nil || !runtimeAlias {
+				return fmt.Errorf("invalid installer step for --only: %s", o.OnlyStep)
+			}
+		}
 	}
 	return nil
 }
@@ -339,11 +343,55 @@ func isRuntimeSourceMode(mode string) bool {
 }
 
 func requiresRuntimeLockForStep(step string) bool {
+	if _, runtimeAlias, _ := parseRuntimeOnlyComponents(step); runtimeAlias {
+		return true
+	}
 	switch strings.ToLower(strings.TrimSpace(step)) {
 	case "", strings.ToLower(steps.InstallRuntime), strings.ToLower(steps.ActivateRuntime), strings.ToLower(steps.ConfigurePHP):
 		return true
 	default:
 		return false
+	}
+}
+
+func parseRuntimeOnlyComponents(raw string) ([]string, bool, error) {
+	only := strings.ToLower(strings.TrimSpace(raw))
+	if only == "" || isInstallerStepSupported(only) {
+		return nil, false, nil
+	}
+	parts := strings.Split(only, ",")
+	componentSet := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		token := strings.ToLower(strings.TrimSpace(part))
+		if token == "" {
+			return nil, false, fmt.Errorf("empty runtime component alias")
+		}
+		component, ok := runtimeComponentFromAlias(token)
+		if !ok {
+			return nil, false, fmt.Errorf("unsupported runtime component alias: %s", token)
+		}
+		componentSet[component] = struct{}{}
+	}
+	components := make([]string, 0, len(componentSet))
+	for component := range componentSet {
+		components = append(components, component)
+	}
+	sort.Strings(components)
+	return components, true, nil
+}
+
+func runtimeComponentFromAlias(alias string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(alias)) {
+	case "nginx":
+		return "nginx", true
+	case "php", "php-fpm", "phpfpm":
+		return "php-fpm", true
+	case "mysql", "mariadb":
+		return "mariadb", true
+	case "postgres", "postgresql":
+		return "postgresql", true
+	default:
+		return "", false
 	}
 }
 
@@ -565,10 +613,24 @@ func (i *Installer) Run(ctx context.Context) (*Report, error) {
 	runErr := error(nil)
 	onlyStep := strings.ToLower(strings.TrimSpace(i.opts.OnlyStep))
 	if onlyStep != "" {
-		for _, step := range executionPlan {
-			if strings.EqualFold(step.name, onlyStep) {
-				runErr = execStep(step.name, step.fn, true)
-				break
+		if runtimeComponents, runtimeAlias, parseErr := parseRuntimeOnlyComponents(onlyStep); parseErr != nil {
+			runErr = parseErr
+		} else if runtimeAlias {
+			scope := strings.Join(runtimeComponents, ",")
+			runErr = execStep(steps.InstallRuntime+"["+scope+"]", func(stepCtx context.Context) error {
+				return i.installRuntimeArtifactsSelected(stepCtx, runtimeComponents)
+			}, true)
+			if runErr == nil {
+				runErr = execStep(steps.ActivateRuntime+"["+scope+"]", func(stepCtx context.Context) error {
+					return i.activateRuntimeServicesSelected(stepCtx, runtimeComponents)
+				}, true)
+			}
+		} else {
+			for _, step := range executionPlan {
+				if strings.EqualFold(step.name, onlyStep) {
+					runErr = execStep(step.name, step.fn, true)
+					break
+				}
 			}
 		}
 	} else {
@@ -674,13 +736,17 @@ func (i *Installer) installPackages(ctx context.Context) error {
 }
 
 func (i *Installer) installRuntimeArtifacts(ctx context.Context) error {
+	return i.installRuntimeArtifactsSelected(ctx, nil)
+}
+
+func (i *Installer) installRuntimeArtifactsSelected(ctx context.Context, selected []string) error {
 	if !isRuntimeSourceMode(i.opts.InstallMode) {
 		return nil
 	}
-	return i.installRuntimeFromSources(ctx)
+	return i.installRuntimeFromSourcesSelected(ctx, selected)
 }
 
-func (i *Installer) installRuntimeFromSources(ctx context.Context) error {
+func (i *Installer) installRuntimeFromSourcesSelected(ctx context.Context, selected []string) error {
 	lock, err := i.resolveRuntimeSourceLock(ctx)
 	if err != nil {
 		return err
@@ -690,14 +756,13 @@ func (i *Installer) installRuntimeFromSources(ctx context.Context) error {
 		return err
 	}
 
-	componentNames := make([]string, 0, len(channel))
-	for name := range channel {
-		componentNames = append(componentNames, name)
+	selectedChannel, componentNames, err := selectRuntimeComponents(channel, selected)
+	if err != nil {
+		return err
 	}
-	sort.Strings(componentNames)
 
 	for _, componentName := range componentNames {
-		component := channel[componentName]
+		component := selectedChannel[componentName]
 		if err := i.installRuntimeComponentFromSource(ctx, componentName, component); err != nil {
 			return err
 		}
@@ -884,6 +949,10 @@ func runtimeSignatureKeyFallbackURL(componentName string) string {
 }
 
 func (i *Installer) activateRuntimeServices(ctx context.Context) error {
+	return i.activateRuntimeServicesSelected(ctx, nil)
+}
+
+func (i *Installer) activateRuntimeServicesSelected(ctx context.Context, selected []string) error {
 	if !isRuntimeSourceMode(i.opts.InstallMode) {
 		return nil
 	}
@@ -900,19 +969,18 @@ func (i *Installer) activateRuntimeServices(ctx context.Context) error {
 		return fmt.Errorf("create systemd unit dir: %w", err)
 	}
 
-	componentNames := make([]string, 0, len(channel))
-	for name := range channel {
-		componentNames = append(componentNames, name)
+	selectedChannel, componentNames, err := selectRuntimeComponents(channel, selected)
+	if err != nil {
+		return err
 	}
-	sort.Strings(componentNames)
 
-	if err := i.prepareRuntimeCompatibility(ctx, channel, componentNames); err != nil {
+	if err := i.prepareRuntimeCompatibility(ctx, selectedChannel, componentNames); err != nil {
 		return err
 	}
 
 	unitNames := make([]string, 0, len(componentNames))
 	for _, componentName := range componentNames {
-		component := channel[componentName]
+		component := selectedChannel[componentName]
 		unitName := strings.TrimSpace(component.Systemd.Name)
 		execStart := strings.TrimSpace(component.Systemd.ExecStart)
 		if unitName == "" || execStart == "" {
@@ -926,7 +994,7 @@ func (i *Installer) activateRuntimeServices(ctx context.Context) error {
 		}
 		unitNames = append(unitNames, unitName)
 	}
-	if err := i.installRuntimeSystemdAliases(channel, unitDir); err != nil {
+	if err := i.installRuntimeSystemdAliases(selectedChannel, unitDir); err != nil {
 		return err
 	}
 
@@ -944,6 +1012,44 @@ func (i *Installer) activateRuntimeServices(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func selectRuntimeComponents(
+	channel RuntimeChannelLock,
+	selected []string,
+) (RuntimeChannelLock, []string, error) {
+	if len(selected) == 0 {
+		names := make([]string, 0, len(channel))
+		subset := make(RuntimeChannelLock, len(channel))
+		for name, component := range channel {
+			names = append(names, name)
+			subset[name] = component
+		}
+		sort.Strings(names)
+		return subset, names, nil
+	}
+
+	names := make([]string, 0, len(selected))
+	subset := make(RuntimeChannelLock, len(selected))
+	seen := make(map[string]struct{}, len(selected))
+	for _, raw := range selected {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		component, ok := channel[name]
+		if !ok {
+			return nil, nil, fmt.Errorf("runtime channel does not contain component %s", name)
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+		subset[name] = component
+	}
+	sort.Strings(names)
+	return subset, names, nil
 }
 
 var majorMinorVersionPattern = regexp.MustCompile(`^\d+\.\d+`)

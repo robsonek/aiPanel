@@ -288,7 +288,7 @@ func newInstallFlagSet(defaults installer.Options) (*flag.FlagSet, *installFlagV
 		panelDomain:     fs.String("panel-domain", "", "panel domain for nginx server_name (required with --reverse-proxy)"),
 		letsEncrypt:     fs.Bool("lets-encrypt", defaults.EnableLetsEncrypt, "issue Let's Encrypt certificate for panel domain (requires --reverse-proxy)"),
 		letsEncryptMail: fs.String("lets-encrypt-email", defaults.LetsEncryptEmail, "email for Let's Encrypt registration (required with --lets-encrypt)"),
-		onlyStep:        fs.String("only", "", "run only one installer step (e.g. install_phpmyadmin)"),
+		onlyStep:        fs.String("only", "", "run one installer step or runtime service alias (e.g. install_phpmyadmin, postgres, mysql, php, nginx)"),
 		skipHealthcheck: fs.Bool("skip-healthcheck", false, "skip final /health check"),
 		dryRun:          fs.Bool("dry-run", false, "do not execute system commands"),
 	}

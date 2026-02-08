@@ -113,6 +113,25 @@ func TestOptionsValidate(t *testing.T) {
 			t.Fatalf("expected valid options for only phpmyadmin step, got %v", err)
 		}
 	})
+
+	t.Run("runtime service aliases are valid in only mode", func(t *testing.T) {
+		opts := DefaultOptions()
+		opts.OnlyStep = "postgres,mysql,php,nginx"
+		if err := opts.validate(); err != nil {
+			t.Fatalf("expected runtime service aliases to be valid, got %v", err)
+		}
+	})
+
+	t.Run("runtime service aliases require runtime lock", func(t *testing.T) {
+		opts := DefaultOptions()
+		opts.OnlyStep = "postgres"
+		opts.RuntimeLockPath = ""
+		opts.RuntimeManifestURL = ""
+		err := opts.validate()
+		if err == nil || !strings.Contains(err.Error(), "requires runtime lock path or runtime manifest URL") {
+			t.Fatalf("expected runtime lock requirement for runtime alias, got %v", err)
+		}
+	})
 }
 
 func TestOptionsWithDefaults(t *testing.T) {
