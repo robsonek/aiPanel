@@ -2624,7 +2624,17 @@ func (i *Installer) installPGAdmin(ctx context.Context) error {
 }
 
 func (i *Installer) ensurePGAdminPrerequisites(ctx context.Context) error {
-	packages := []string{"python3", "python3-pip", "python3-venv"}
+	// pgAdmin dependencies (notably gssapi/psycopg[c]) may need native headers/tools on Debian 13.
+	packages := []string{
+		"build-essential",
+		"libffi-dev",
+		"libkrb5-dev",
+		"libpq-dev",
+		"python3",
+		"python3-dev",
+		"python3-pip",
+		"python3-venv",
+	}
 	installArgs := append([]string{"install", "-y", "--no-install-recommends"}, packages...)
 	if _, err := i.runner.Run(ctx, "apt-get", installArgs...); err != nil {
 		return fmt.Errorf("apt install pgAdmin prerequisites: %w", err)
