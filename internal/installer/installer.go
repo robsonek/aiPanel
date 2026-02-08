@@ -1893,6 +1893,10 @@ func (i *Installer) installPHPMyAdmin(ctx context.Context) error {
 		return err
 	}
 
+	if err := i.configureNginx(ctx); err != nil {
+		return fmt.Errorf("configure nginx for phpMyAdmin: %w", err)
+	}
+
 	i.logf("[install_phpmyadmin] installed at %s", installDir)
 	return nil
 }

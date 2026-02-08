@@ -436,6 +436,9 @@ func TestInstallerRun_OnlyInstallPHPMyAdmin(t *testing.T) {
 	opts.PHPMyAdminURL = "file://" + archivePath
 	opts.PHPMyAdminSHA256URL = "file://" + checksumPath
 	opts.PHPMyAdminInstallDir = "/usr/share/phpmyadmin"
+	opts.RuntimeInstallDir = filepath.Join(root, "opt", "aipanel", "runtime")
+	opts.NginxSitesAvailableDir = filepath.Join(root, "etc", "nginx", "sites-available")
+	opts.NginxSitesEnabledDir = filepath.Join(root, "etc", "nginx", "sites-enabled")
 
 	runner := &fakeRunner{}
 	ins := New(opts, runner)
