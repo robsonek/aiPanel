@@ -38,6 +38,7 @@ func newHandler(
 }
 
 var lookupCommandPath = exec.LookPath
+
 const minAdminPasswordLength = installer.MinAdminPasswordLength
 
 func main() {
@@ -256,6 +257,7 @@ type installFlagValues struct {
 	runtimeInstall  *string
 	reverseProxy    *bool
 	panelDomain     *string
+	onlyStep        *string
 	skipHealthcheck *bool
 	dryRun          *bool
 }
@@ -281,6 +283,7 @@ func newInstallFlagSet(defaults installer.Options) (*flag.FlagSet, *installFlagV
 		runtimeInstall:  fs.String("runtime-install-dir", defaults.RuntimeInstallDir, "runtime install directory for source runtime modes"),
 		reverseProxy:    fs.Bool("reverse-proxy", defaults.ReverseProxy, "bind panel to loopback and expose via nginx reverse proxy"),
 		panelDomain:     fs.String("panel-domain", "", "panel domain for nginx server_name (required with --reverse-proxy)"),
+		onlyStep:        fs.String("only", "", "run only one installer step (e.g. install_phpmyadmin)"),
 		skipHealthcheck: fs.Bool("skip-healthcheck", false, "skip final /health check"),
 		dryRun:          fs.Bool("dry-run", false, "do not execute system commands"),
 	}
@@ -305,6 +308,7 @@ func (v *installFlagValues) toOptions(defaults installer.Options) (installer.Opt
 	opts.RuntimeLockPath = strings.TrimSpace(*v.runtimeLockPath)
 	opts.RuntimeManifestURL = strings.TrimSpace(*v.runtimeManifest)
 	opts.RuntimeInstallDir = strings.TrimSpace(*v.runtimeInstall)
+	opts.OnlyStep = strings.ToLower(strings.TrimSpace(*v.onlyStep))
 	if err := applyReverseProxySettings(&opts, *v.reverseProxy, strings.TrimSpace(*v.panelDomain)); err != nil {
 		return installer.Options{}, false, err
 	}
@@ -536,11 +540,12 @@ func runInstaller(opts installer.Options, dryRun bool) {
 	runner := systemd.ExecRunner{DryRun: dryRun}
 	ins := installer.New(opts, runner)
 	fmt.Printf(
-		"installer start: mode=%s channel=%s lock=%s runtime_dir=%s verify_signatures=%t dry_run=%t\n",
+		"installer start: mode=%s channel=%s lock=%s runtime_dir=%s only_step=%s verify_signatures=%t dry_run=%t\n",
 		opts.InstallMode,
 		opts.RuntimeChannel,
 		opts.RuntimeLockPath,
 		opts.RuntimeInstallDir,
+		opts.OnlyStep,
 		opts.VerifyUpstreamSources,
 		dryRun,
 	)

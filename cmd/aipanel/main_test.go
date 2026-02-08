@@ -279,6 +279,21 @@ func TestInstallFlagValuesToOptions_RejectsShortAdminPassword(t *testing.T) {
 	}
 }
 
+func TestInstallFlagValuesToOptions_OnlyStep(t *testing.T) {
+	defaults := installer.DefaultOptions()
+	fs, values := newInstallFlagSet(defaults)
+	if err := fs.Parse([]string{"--only", "install_phpmyadmin"}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+	opts, _, err := values.toOptions(defaults)
+	if err != nil {
+		t.Fatalf("toOptions error: %v", err)
+	}
+	if opts.OnlyStep != "install_phpmyadmin" {
+		t.Fatalf("only step mismatch: got %q", opts.OnlyStep)
+	}
+}
+
 func TestApplyReverseProxySettings_RequiresDomain(t *testing.T) {
 	opts := installer.DefaultOptions()
 	err := applyReverseProxySettings(&opts, true, "")

@@ -5,6 +5,22 @@ server {
     access_log /var/log/nginx/aipanel.access.log;
     error_log /var/log/nginx/aipanel.error.log;
 
+    location = /phpmyadmin {
+        return 301 /phpmyadmin/;
+    }
+
+    location ^~ /phpmyadmin/ {
+        root /usr/share;
+        index index.php;
+        try_files $uri $uri/ /phpmyadmin/index.php?$args;
+    }
+
+    location ~ ^/phpmyadmin/.*\.php$ {
+        root /usr/share;
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/aipanel-default-{{ .PHPVersion }}.sock;
+    }
+
     location / {
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

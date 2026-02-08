@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/robsonek/aiPanel/internal/installer/steps"
 )
 
 type fakeRunner struct {
@@ -118,6 +120,7 @@ func TestInstallerRun_Phase1DrySystem(t *testing.T) {
 	opts.CatchAllTemplatePath = filepath.Join(root, "configs", "templates", "nginx_catchall.conf.tmpl")
 	opts.AdminEmail = "admin@example.com"
 	opts.AdminPassword = "supersecret123"
+	opts.SkipPHPMyAdmin = true
 	opts.SkipHealthcheck = true
 	opts.MinCPU = 1
 	opts.InstallMode = InstallModeSourceBuild
@@ -355,6 +358,7 @@ func TestInstallerRun_SourceBuildCompilesRuntime(t *testing.T) {
 	opts.CatchAllTemplatePath = filepath.Join(root, "configs", "templates", "nginx_catchall.conf.tmpl")
 	opts.AdminEmail = "admin@example.com"
 	opts.AdminPassword = "supersecret123"
+	opts.SkipPHPMyAdmin = true
 	opts.SkipHealthcheck = true
 	opts.MinCPU = 1
 	opts.InstallMode = InstallModeSourceBuild
@@ -397,6 +401,73 @@ func TestInstallerRun_SourceBuildCompilesRuntime(t *testing.T) {
 	}
 	if !strings.Contains(joined, "cp ./bin/nginx") {
 		t.Fatalf("expected build copy command, got:\n%s", joined)
+	}
+}
+
+func TestInstallerRun_OnlyInstallPHPMyAdmin(t *testing.T) {
+	root := t.TempDir()
+	archivePath := filepath.Join(root, "phpmyadmin.tar.gz")
+	if err := writeTarGzArtifact(
+		archivePath,
+		"phpMyAdmin-5.2.3-all-languages/index.php",
+		[]byte("<?php echo 'ok';"),
+	); err != nil {
+		t.Fatalf("write phpmyadmin archive: %v", err)
+	}
+	sum, err := fileSHA256(archivePath)
+	if err != nil {
+		t.Fatalf("checksum phpmyadmin archive: %v", err)
+	}
+	checksumPath := filepath.Join(root, "phpmyadmin.tar.gz.sha256")
+	if err := os.WriteFile(
+		checksumPath,
+		[]byte(sum+"  phpMyAdmin-5.2.3-all-languages.tar.gz\n"),
+		0o600,
+	); err != nil {
+		t.Fatalf("write phpmyadmin checksum file: %v", err)
+	}
+
+	opts := DefaultOptions()
+	opts.OnlyStep = steps.InstallPHPMyAdmin
+	opts.RootFSPath = root
+	opts.StateFilePath = filepath.Join(root, "var", "lib", "aipanel", ".installer-state.json")
+	opts.ReportFilePath = filepath.Join(root, "var", "lib", "aipanel", "install-report.json")
+	opts.LogFilePath = filepath.Join(root, "var", "log", "aipanel", "install.log")
+	opts.PHPMyAdminURL = "file://" + archivePath
+	opts.PHPMyAdminSHA256URL = "file://" + checksumPath
+	opts.PHPMyAdminInstallDir = "/usr/share/phpmyadmin"
+
+	runner := &fakeRunner{}
+	ins := New(opts, runner)
+	report, err := ins.Run(context.Background())
+	if err != nil {
+		t.Fatalf("installer run failed: %v", err)
+	}
+	if report.Status != "ok" {
+		t.Fatalf("expected report status ok, got %q", report.Status)
+	}
+	if len(report.Steps) != 1 {
+		t.Fatalf("expected exactly one step in report, got %d", len(report.Steps))
+	}
+	if report.Steps[0].Name != steps.InstallPHPMyAdmin {
+		t.Fatalf("expected only %s step, got %s", steps.InstallPHPMyAdmin, report.Steps[0].Name)
+	}
+
+	installedIndex := filepath.Join(root, "usr", "share", "phpmyadmin", "index.php")
+	body, err := os.ReadFile(installedIndex) //nolint:gosec // test reads fixture under temp dir.
+	if err != nil {
+		t.Fatalf("read installed phpmyadmin index: %v", err)
+	}
+	if !strings.Contains(string(body), "ok") {
+		t.Fatalf("unexpected phpmyadmin index content: %q", string(body))
+	}
+
+	joined := strings.Join(runner.commands, "\n")
+	if strings.Contains(joined, "apt-get update") {
+		t.Fatalf("did not expect full install step in only mode, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "chown -R root:www-data") {
+		t.Fatalf("expected phpmyadmin permissions command, got:\n%s", joined)
 	}
 }
 

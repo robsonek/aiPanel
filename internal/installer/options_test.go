@@ -3,6 +3,8 @@ package installer
 import (
 	"strings"
 	"testing"
+
+	"github.com/robsonek/aiPanel/internal/installer/steps"
 )
 
 func TestOptionsValidate(t *testing.T) {
@@ -60,6 +62,35 @@ func TestOptionsValidate(t *testing.T) {
 			t.Fatalf("expected admin password length validation error, got %v", err)
 		}
 	})
+
+	t.Run("phpmyadmin URLs are required when enabled", func(t *testing.T) {
+		opts := DefaultOptions()
+		opts.PHPMyAdminURL = ""
+		err := opts.validate()
+		if err == nil || !strings.Contains(strings.ToLower(err.Error()), "phpmyadmin source url") {
+			t.Fatalf("expected phpmyadmin source validation error, got %v", err)
+		}
+	})
+
+	t.Run("invalid only step", func(t *testing.T) {
+		opts := DefaultOptions()
+		opts.OnlyStep = "not-a-step"
+		err := opts.validate()
+		if err == nil || !strings.Contains(strings.ToLower(err.Error()), "invalid installer step") {
+			t.Fatalf("expected invalid only step validation error, got %v", err)
+		}
+	})
+
+	t.Run("only phpmyadmin does not require runtime lock", func(t *testing.T) {
+		opts := DefaultOptions()
+		opts.OnlyStep = steps.InstallPHPMyAdmin
+		opts.RuntimeLockPath = ""
+		opts.RuntimeManifestURL = ""
+		opts.RuntimeInstallDir = ""
+		if err := opts.validate(); err != nil {
+			t.Fatalf("expected valid options for only phpmyadmin step, got %v", err)
+		}
+	})
 }
 
 func TestOptionsWithDefaults(t *testing.T) {
@@ -80,5 +111,11 @@ func TestOptionsWithDefaults(t *testing.T) {
 	}
 	if opts.PanelDomain == "" {
 		t.Fatal("expected panel domain default to be set")
+	}
+	if opts.PHPMyAdminURL == "" || opts.PHPMyAdminSHA256URL == "" || opts.PHPMyAdminInstallDir == "" {
+		t.Fatal("expected phpMyAdmin defaults to be set")
+	}
+	if opts.OnlyStep != "" {
+		t.Fatalf("expected default only step empty, got %q", opts.OnlyStep)
 	}
 }

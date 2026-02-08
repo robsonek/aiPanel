@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"math/big"
 	"net"
 	"net/http"
@@ -38,6 +39,12 @@ import (
 
 const MinAdminPasswordLength = 10
 
+const (
+	defaultPHPMyAdminURL        = "https://files.phpmyadmin.net/phpMyAdmin/5.2.3/phpMyAdmin-5.2.3-all-languages.tar.gz"
+	defaultPHPMyAdminSHA256URL  = "https://files.phpmyadmin.net/phpMyAdmin/5.2.3/phpMyAdmin-5.2.3-all-languages.tar.gz.sha256"
+	defaultPHPMyAdminInstallDir = "/usr/share/phpmyadmin"
+)
+
 // Options controls installer behavior.
 type Options struct {
 	Addr                  string
@@ -60,6 +67,11 @@ type Options struct {
 	VerifyUpstreamSources bool
 	ReverseProxy          bool
 	PanelDomain           string
+	PHPMyAdminURL         string
+	PHPMyAdminSHA256URL   string
+	PHPMyAdminInstallDir  string
+	SkipPHPMyAdmin        bool
+	OnlyStep              string
 
 	OSReleasePath string
 	MemInfoPath   string
@@ -113,6 +125,9 @@ func DefaultOptions() Options {
 		VerifyUpstreamSources:  true,
 		ReverseProxy:           false,
 		PanelDomain:            "_",
+		PHPMyAdminURL:          defaultPHPMyAdminURL,
+		PHPMyAdminSHA256URL:    defaultPHPMyAdminSHA256URL,
+		PHPMyAdminInstallDir:   defaultPHPMyAdminInstallDir,
 		OSReleasePath:          "/etc/os-release",
 		MemInfoPath:            "/proc/meminfo",
 		Proc1ExePath:           "/proc/1/exe",
@@ -183,6 +198,15 @@ func (o Options) withDefaults() Options {
 	if strings.TrimSpace(o.PanelDomain) == "" {
 		o.PanelDomain = d.PanelDomain
 	}
+	if strings.TrimSpace(o.PHPMyAdminURL) == "" {
+		o.PHPMyAdminURL = d.PHPMyAdminURL
+	}
+	if strings.TrimSpace(o.PHPMyAdminSHA256URL) == "" {
+		o.PHPMyAdminSHA256URL = d.PHPMyAdminSHA256URL
+	}
+	if strings.TrimSpace(o.PHPMyAdminInstallDir) == "" {
+		o.PHPMyAdminInstallDir = d.PHPMyAdminInstallDir
+	}
 	if strings.TrimSpace(o.OSReleasePath) == "" {
 		o.OSReleasePath = d.OSReleasePath
 	}
@@ -222,6 +246,7 @@ func (o Options) withDefaults() Options {
 	if o.ReverseProxy {
 		o.Addr = net.JoinHostPort("127.0.0.1", parsePort(o.Addr, "8080"))
 	}
+	o.OnlyStep = strings.ToLower(strings.TrimSpace(o.OnlyStep))
 	return o
 }
 
@@ -241,24 +266,63 @@ func (o Options) validate() error {
 	}
 
 	if isRuntimeSourceMode(mode) &&
+		requiresRuntimeLockForStep(o.OnlyStep) &&
 		strings.TrimSpace(o.RuntimeLockPath) == "" &&
 		strings.TrimSpace(o.RuntimeManifestURL) == "" {
 		return fmt.Errorf("%s mode requires runtime lock path or runtime manifest URL", mode)
 	}
-	if isRuntimeSourceMode(mode) && strings.TrimSpace(o.RuntimeInstallDir) == "" {
+	if isRuntimeSourceMode(mode) &&
+		requiresRuntimeLockForStep(o.OnlyStep) &&
+		strings.TrimSpace(o.RuntimeInstallDir) == "" {
 		return fmt.Errorf("%s mode requires runtime install dir", mode)
 	}
 	if len(strings.TrimSpace(o.AdminPassword)) < MinAdminPasswordLength {
 		return fmt.Errorf("admin password must be at least %d characters", MinAdminPasswordLength)
 	}
+	if !o.SkipPHPMyAdmin {
+		if strings.TrimSpace(o.PHPMyAdminURL) == "" {
+			return fmt.Errorf("phpMyAdmin source URL is required")
+		}
+		if strings.TrimSpace(o.PHPMyAdminSHA256URL) == "" {
+			return fmt.Errorf("phpMyAdmin checksum URL is required")
+		}
+		if strings.TrimSpace(o.PHPMyAdminInstallDir) == "" {
+			return fmt.Errorf("phpMyAdmin install dir is required")
+		}
+	}
 	if o.ReverseProxy && strings.TrimSpace(o.PanelDomain) == "" {
 		return fmt.Errorf("panel domain is required when reverse proxy is enabled")
+	}
+	if strings.TrimSpace(o.OnlyStep) != "" && !isInstallerStepSupported(o.OnlyStep) {
+		return fmt.Errorf("invalid installer step for --only: %s", o.OnlyStep)
 	}
 	return nil
 }
 
+func isInstallerStepSupported(step string) bool {
+	s := strings.ToLower(strings.TrimSpace(step))
+	if s == "" {
+		return false
+	}
+	for _, name := range steps.Ordered {
+		if s == strings.ToLower(strings.TrimSpace(name)) {
+			return true
+		}
+	}
+	return false
+}
+
 func isRuntimeSourceMode(mode string) bool {
 	return strings.EqualFold(strings.TrimSpace(mode), InstallModeSourceBuild)
+}
+
+func requiresRuntimeLockForStep(step string) bool {
+	switch strings.ToLower(strings.TrimSpace(step)) {
+	case "", strings.ToLower(steps.InstallRuntime), strings.ToLower(steps.ActivateRuntime), strings.ToLower(steps.ConfigurePHP):
+		return true
+	default:
+		return false
+	}
 }
 
 // StepResult captures one installation step outcome.
@@ -346,7 +410,7 @@ func (i *Installer) Run(ctx context.Context) (*Report, error) {
 	if err := i.opts.validate(); err != nil {
 		return nil, err
 	}
-	if isRuntimeSourceMode(i.opts.InstallMode) {
+	if isRuntimeSourceMode(i.opts.InstallMode) && requiresRuntimeLockForStep(i.opts.OnlyStep) {
 		if _, err := i.resolveRuntimeSourceLock(ctx); err != nil {
 			return nil, fmt.Errorf("load runtime source lock: %w", err)
 		}
@@ -367,14 +431,14 @@ func (i *Installer) Run(ctx context.Context) (*Report, error) {
 		state.Completed = map[string]bool{}
 	}
 
-	execStep := func(name string, fn func(context.Context) error) error {
+	execStep := func(name string, fn func(context.Context) error, force bool) error {
 		started := i.now().UTC()
 		step := StepResult{
 			Name:      name,
 			StartedAt: started.Format(time.RFC3339),
 		}
 
-		if state.Completed[name] {
+		if state.Completed[name] && !force {
 			step.Status = "skipped"
 			step.FinishedAt = i.now().UTC().Format(time.RFC3339)
 			report.Steps = append(report.Steps, step)
@@ -403,57 +467,49 @@ func (i *Installer) Run(ctx context.Context) (*Report, error) {
 		return nil
 	}
 
-	runErr := execStep(steps.Preflight, i.runPreflight)
-	if runErr == nil {
-		runErr = execStep(steps.SystemUpdate, i.runSystemUpdate)
+	type installerStep struct {
+		name string
+		fn   func(context.Context) error
 	}
-	if runErr == nil {
-		runErr = execStep(steps.AddRepos, i.addRepositories)
+
+	executionPlan := []installerStep{
+		{name: steps.Preflight, fn: i.runPreflight},
+		{name: steps.SystemUpdate, fn: i.runSystemUpdate},
+		{name: steps.AddRepos, fn: i.addRepositories},
+		{name: steps.InstallPkgs, fn: i.installPackages},
+		{name: steps.PrepareDirs, fn: i.prepareDirectories},
+		{name: steps.InstallRuntime, fn: i.installRuntimeArtifacts},
+		{name: steps.ActivateRuntime, fn: i.activateRuntimeServices},
+		{name: steps.CopyBinary, fn: i.copyBinary},
+		{name: steps.WriteConfig, fn: i.writeConfig},
+		{name: steps.CreateUser, fn: i.createServiceUser},
+		{name: steps.InstallNginx, fn: i.installNginx},
+		{name: steps.InitDatabases, fn: i.initDatabases},
+		{name: steps.ConfigureNginx, fn: i.configureNginx},
+		{name: steps.ConfigurePHP, fn: i.configurePHPFPM},
+		{name: steps.InstallPHPMyAdmin, fn: i.installPHPMyAdmin},
+		{name: steps.WriteUnit, fn: i.writeUnitFile},
+		{name: steps.StartPanel, fn: i.startPanelService},
+		{name: steps.CreateAdmin, fn: i.createAdminUser},
+		{name: steps.Healthcheck, fn: i.runHealthcheck},
 	}
-	if runErr == nil {
-		runErr = execStep(steps.InstallPkgs, i.installPackages)
-	}
-	if runErr == nil {
-		runErr = execStep(steps.PrepareDirs, i.prepareDirectories)
-	}
-	if runErr == nil {
-		runErr = execStep(steps.InstallRuntime, i.installRuntimeArtifacts)
-	}
-	if runErr == nil {
-		runErr = execStep(steps.ActivateRuntime, i.activateRuntimeServices)
-	}
-	if runErr == nil {
-		runErr = execStep(steps.CopyBinary, i.copyBinary)
-	}
-	if runErr == nil {
-		runErr = execStep(steps.WriteConfig, i.writeConfig)
-	}
-	if runErr == nil {
-		runErr = execStep(steps.CreateUser, i.createServiceUser)
-	}
-	if runErr == nil {
-		runErr = execStep(steps.InstallNginx, i.installNginx)
-	}
-	if runErr == nil {
-		runErr = execStep(steps.InitDatabases, i.initDatabases)
-	}
-	if runErr == nil {
-		runErr = execStep(steps.ConfigureNginx, i.configureNginx)
-	}
-	if runErr == nil {
-		runErr = execStep(steps.ConfigurePHP, i.configurePHPFPM)
-	}
-	if runErr == nil {
-		runErr = execStep(steps.WriteUnit, i.writeUnitFile)
-	}
-	if runErr == nil {
-		runErr = execStep(steps.StartPanel, i.startPanelService)
-	}
-	if runErr == nil {
-		runErr = execStep(steps.CreateAdmin, i.createAdminUser)
-	}
-	if runErr == nil {
-		runErr = execStep(steps.Healthcheck, i.runHealthcheck)
+
+	runErr := error(nil)
+	onlyStep := strings.ToLower(strings.TrimSpace(i.opts.OnlyStep))
+	if onlyStep != "" {
+		for _, step := range executionPlan {
+			if strings.EqualFold(step.name, onlyStep) {
+				runErr = execStep(step.name, step.fn, true)
+				break
+			}
+		}
+	} else {
+		for _, step := range executionPlan {
+			if runErr != nil {
+				break
+			}
+			runErr = execStep(step.name, step.fn, false)
+		}
 	}
 
 	if runErr != nil {
@@ -1290,6 +1346,80 @@ func directoryHasEntries(path string) (bool, error) {
 	return len(entries) > 0, nil
 }
 
+func parseSHA256Checksum(raw []byte) (string, error) {
+	lines := strings.Split(string(raw), "\n")
+	for _, line := range lines {
+		fields := strings.Fields(strings.TrimSpace(line))
+		for _, field := range fields {
+			token := strings.TrimSpace(strings.TrimPrefix(field, "*"))
+			if isValidSHA256(token) {
+				return strings.ToLower(token), nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no valid sha256 checksum found")
+}
+
+func copyDirectory(sourceDir, targetDir string) error {
+	// Source directory path comes from archive extracted by installer.
+	//nolint:gosec // G304
+	return filepath.WalkDir(sourceDir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(sourceDir, path)
+		if err != nil {
+			return err
+		}
+		if rel == "." {
+			return os.MkdirAll(targetDir, 0o750)
+		}
+		targetPath := filepath.Join(targetDir, rel)
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return os.MkdirAll(targetPath, secureArchiveFileMode(info.Mode(), true))
+		}
+		if info.Mode().IsRegular() {
+			return copyRegularFile(path, targetPath, secureArchiveFileMode(info.Mode(), false))
+		}
+		// Ignore non-regular entries for safety.
+		return nil
+	})
+}
+
+func copyRegularFile(sourcePath, targetPath string, mode os.FileMode) error {
+	// Source path is constrained to installer-controlled extraction dir.
+	//nolint:gosec // G304
+	src, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = src.Close()
+	}()
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o750); err != nil {
+		return err
+	}
+
+	// Target path is controlled by installer options.
+	//nolint:gosec // G304
+	dst, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		_ = dst.Close()
+		return err
+	}
+	if err := dst.Close(); err != nil {
+		return err
+	}
+	return os.Chmod(targetPath, mode) //nolint:gosec // G302: mode sanitized by secureArchiveFileMode.
+}
+
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }
@@ -1579,12 +1709,20 @@ func (i *Installer) configureNginx(ctx context.Context) error {
 	if panelHost == "" {
 		panelHost = "_"
 	}
+	phpVersion, err := i.runtimePHPMajorMinorVersion(ctx)
+	if err != nil {
+		i.logf("[configure_nginx] resolve php-fpm version for phpMyAdmin failed: %v", err)
+	}
+	if strings.TrimSpace(phpVersion) == "" {
+		phpVersion = "8.3"
+	}
 	panelContent, err := renderTemplateWithFallback(
 		i.opts.PanelVhostTemplatePath,
 		defaultPanelVhostTemplate,
 		map[string]string{
-			"PanelPort": panelPort,
-			"PanelHost": panelHost,
+			"PanelPort":  panelPort,
+			"PanelHost":  panelHost,
+			"PHPVersion": phpVersion,
 		},
 	)
 	if err != nil {
@@ -1667,6 +1805,107 @@ func (i *Installer) configurePHPFPM(ctx context.Context) error {
 			// Keep installer resilient when only one version is available.
 			i.logf("[configure_phpfpm] restart php%s-fpm failed: %v", version, err)
 		}
+	}
+	return nil
+}
+
+func (i *Installer) installPHPMyAdmin(ctx context.Context) error {
+	if i.opts.SkipPHPMyAdmin {
+		i.logf("[install_phpmyadmin] skipped by configuration")
+		return nil
+	}
+
+	installDir := pathInRootFS(i.opts.RootFSPath, i.opts.PHPMyAdminInstallDir)
+	if info, err := os.Stat(installDir); err == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("phpMyAdmin install path is not a directory: %s", installDir)
+		}
+		hasEntries, readErr := directoryHasEntries(installDir)
+		if readErr != nil {
+			return fmt.Errorf("inspect phpMyAdmin install dir: %w", readErr)
+		}
+		if hasEntries {
+			i.logf("[install_phpmyadmin] existing installation detected at %s, keeping as-is", installDir)
+			return i.ensurePHPMyAdminPermissions(ctx, installDir)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect phpMyAdmin install dir: %w", err)
+	}
+
+	archiveData, err := i.downloadBytes(ctx, i.opts.PHPMyAdminURL)
+	if err != nil {
+		return fmt.Errorf("download phpMyAdmin archive: %w", err)
+	}
+	checksumData, err := i.downloadBytes(ctx, i.opts.PHPMyAdminSHA256URL)
+	if err != nil {
+		return fmt.Errorf("download phpMyAdmin checksum: %w", err)
+	}
+	expectedChecksum, err := parseSHA256Checksum(checksumData)
+	if err != nil {
+		return fmt.Errorf("parse phpMyAdmin checksum: %w", err)
+	}
+	actualChecksum := fmt.Sprintf("%x", sha256.Sum256(archiveData))
+	if !strings.EqualFold(expectedChecksum, actualChecksum) {
+		return fmt.Errorf(
+			"phpMyAdmin checksum mismatch: expected %s got %s",
+			expectedChecksum,
+			actualChecksum,
+		)
+	}
+	i.logf("[install_phpmyadmin] checksum verified: %s", actualChecksum)
+
+	archivePath, err := writeTempBytes("aipanel-phpmyadmin-*.tar.gz", archiveData)
+	if err != nil {
+		return fmt.Errorf("write phpMyAdmin archive temp file: %w", err)
+	}
+	defer func() {
+		_ = os.Remove(archivePath)
+	}()
+
+	extractDir, err := os.MkdirTemp("", "aipanel-phpmyadmin-*")
+	if err != nil {
+		return fmt.Errorf("create phpMyAdmin extract dir: %w", err)
+	}
+	defer func() {
+		_ = os.RemoveAll(extractDir)
+	}()
+
+	if err := extractArchive(archivePath, extractDir); err != nil {
+		return fmt.Errorf("extract phpMyAdmin archive: %w", err)
+	}
+
+	sourceDir, err := detectSourceDir(extractDir)
+	if err != nil {
+		return fmt.Errorf("detect phpMyAdmin source dir: %w", err)
+	}
+	indexPath := filepath.Join(sourceDir, "index.php")
+	if _, err := os.Stat(indexPath); err != nil {
+		return fmt.Errorf("phpMyAdmin archive missing index.php: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(installDir), 0o750); err != nil {
+		return fmt.Errorf("create phpMyAdmin parent dir: %w", err)
+	}
+	if err := copyDirectory(sourceDir, installDir); err != nil {
+		return fmt.Errorf("copy phpMyAdmin files: %w", err)
+	}
+	if err := i.ensurePHPMyAdminPermissions(ctx, installDir); err != nil {
+		return err
+	}
+
+	i.logf("[install_phpmyadmin] installed at %s", installDir)
+	return nil
+}
+
+func (i *Installer) ensurePHPMyAdminPermissions(ctx context.Context, installDir string) error {
+	if _, err := i.runner.Run(ctx, "id", "-u", "www-data"); err != nil {
+		return fmt.Errorf("resolve www-data user: %w", err)
+	}
+	if _, err := i.runner.Run(ctx, "chown", "-R", "root:www-data", installDir); err != nil {
+		return fmt.Errorf("set phpMyAdmin ownership: %w", err)
+	}
+	if _, err := i.runner.Run(ctx, "chmod", "-R", "g+rX,o-rwx", installDir); err != nil {
+		return fmt.Errorf("set phpMyAdmin permissions: %w", err)
 	}
 	return nil
 }
@@ -2028,6 +2267,22 @@ const defaultPanelVhostTemplate = `server {
 
     access_log /var/log/nginx/aipanel.access.log;
     error_log /var/log/nginx/aipanel.error.log;
+
+    location = /phpmyadmin {
+        return 301 /phpmyadmin/;
+    }
+
+    location ^~ /phpmyadmin/ {
+        root /usr/share;
+        index index.php;
+        try_files $uri $uri/ /phpmyadmin/index.php?$args;
+    }
+
+    location ~ ^/phpmyadmin/.*\.php$ {
+        root /usr/share;
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/aipanel-default-{{ .PHPVersion }}.sock;
+    }
 
     location / {
         proxy_set_header Host $host;
