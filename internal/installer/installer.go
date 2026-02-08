@@ -700,15 +700,37 @@ func (i *Installer) verifyRuntimeSourceSignature(
 		_ = os.RemoveAll(gnupgHome)
 	}()
 
-	verifyCmd := strings.Join([]string{
+	commands := []string{
 		"export GNUPGHOME=" + shellQuote(gnupgHome),
-		"gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys " + shellQuote(fingerprint),
-		"gpg --batch --verify " + shellQuote(signaturePath) + " " + shellQuote(archivePath),
-	}, " && ")
+	}
+
+	keyserverImport := "gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys " + shellQuote(fingerprint)
+	if fallbackURL := runtimeSignatureKeyFallbackURL(componentName); fallbackURL != "" {
+		commands = append(commands, keyserverImport+" || true")
+		commands = append(
+			commands,
+			"if ! gpg --batch --list-keys --with-colons 2>/dev/null | grep -iq "+shellQuote(fingerprint)+"; then "+
+				"curl -fsSL "+shellQuote(fallbackURL)+" | gpg --batch --import -; fi",
+		)
+	} else {
+		commands = append(commands, keyserverImport)
+	}
+	commands = append(commands, "gpg --batch --verify "+shellQuote(signaturePath)+" "+shellQuote(archivePath))
+
+	verifyCmd := strings.Join(commands, " && ")
 	if _, err := i.runner.Run(ctx, "bash", "-lc", verifyCmd); err != nil {
 		return fmt.Errorf("verify upstream signature for %s: %w", componentName, err)
 	}
 	return nil
+}
+
+func runtimeSignatureKeyFallbackURL(componentName string) string {
+	switch strings.ToLower(strings.TrimSpace(componentName)) {
+	case "mariadb":
+		return "https://mariadb.org/mariadb_release_signing_key.asc"
+	default:
+		return ""
+	}
 }
 
 func (i *Installer) activateRuntimeServices(ctx context.Context) error {
@@ -1139,7 +1161,7 @@ func (i *Installer) downloadBytes(ctx context.Context, ref string) ([]byte, erro
 		if err != nil {
 			return nil, err
 		}
-		client := &http.Client{Timeout: 60 * time.Second}
+		client := &http.Client{Timeout: 20 * time.Minute}
 		resp, err := client.Do(req)
 		if err != nil {
 			return nil, err
@@ -1972,6 +1994,7 @@ const defaultCatchallTemplate = `server {
 `
 
 const sourceRuntimeNginxConf = `worker_processes auto;
+user www-data;
 pid /run/nginx.pid;
 error_log /var/log/nginx/error.log warn;
 

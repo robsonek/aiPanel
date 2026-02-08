@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/robsonek/aiPanel/internal/platform/config"
@@ -108,6 +111,17 @@ func TestService_CreateSite(t *testing.T) {
 	}
 	if !containsCommand(runner.commands, "useradd --system --create-home --home-dir "+svc.webRoot+"/test.example.com --shell /usr/sbin/nologin site_test_example_com") {
 		t.Fatalf("expected useradd command, got %v", runner.commands)
+	}
+	if !containsCommand(runner.commands, "chown -R site_test_example_com:www-data "+svc.webRoot+"/test.example.com") {
+		t.Fatalf("expected chown command with nginx-readable group, got %v", runner.commands)
+	}
+	indexPath := filepath.Join(svc.webRoot, "test.example.com", "public_html", "index.html")
+	content, readErr := os.ReadFile(indexPath)
+	if readErr != nil {
+		t.Fatalf("read index bootstrap file: %v", readErr)
+	}
+	if !strings.Contains(string(content), "Site created by aiPanel.") {
+		t.Fatalf("unexpected bootstrap index content: %q", string(content))
 	}
 	list, err := svc.ListSites(ctx)
 	if err != nil {

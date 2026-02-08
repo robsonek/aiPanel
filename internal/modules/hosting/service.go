@@ -24,6 +24,7 @@ var (
 )
 
 const defaultPHPVersion = "8.5"
+const nginxContentReaderGroup = "www-data"
 
 // Service orchestrates site CRUD against adapters and panel.db.
 type Service struct {
@@ -103,6 +104,13 @@ func (s *Service) CreateSite(ctx context.Context, req CreateSiteRequest) (Site, 
 		SystemUser: systemUser,
 	}
 
+	if err = os.MkdirAll(s.webRoot, 0o755); err != nil {
+		return Site{}, fmt.Errorf("prepare web root: %w", err)
+	}
+	if err = os.Chmod(s.webRoot, 0o755); err != nil {
+		return Site{}, fmt.Errorf("set web root permissions: %w", err)
+	}
+
 	var createdUser bool
 	var createdRootBase bool
 	var poolWritten bool
@@ -133,6 +141,9 @@ func (s *Service) CreateSite(ctx context.Context, req CreateSiteRequest) (Site, 
 	if err = os.MkdirAll(rootDir, 0o750); err != nil {
 		return Site{}, fmt.Errorf("create docroot: %w", err)
 	}
+	if err = ensureSiteBootstrapFiles(rootDir, domain); err != nil {
+		return Site{}, fmt.Errorf("bootstrap docroot: %w", err)
+	}
 
 	if _, runErr := s.runner.Run(ctx, "id", systemUser); runErr != nil {
 		if _, runErr = s.runner.Run(ctx,
@@ -147,7 +158,7 @@ func (s *Service) CreateSite(ctx context.Context, req CreateSiteRequest) (Site, 
 		}
 		createdUser = true
 	}
-	if _, runErr := s.runner.Run(ctx, "chown", "-R", systemUser+":"+systemUser, rootBaseDir); runErr != nil {
+	if _, runErr := s.runner.Run(ctx, "chown", "-R", systemUser+":"+nginxContentReaderGroup, rootBaseDir); runErr != nil {
 		return Site{}, fmt.Errorf("chown site directory: %w", runErr)
 	}
 
@@ -340,6 +351,22 @@ func systemUserForDomain(domain string) string {
 		token = token[:24]
 	}
 	return "site_" + token
+}
+
+func ensureSiteBootstrapFiles(rootDir, domain string) error {
+	for _, name := range []string{"index.php", "index.html", "index.htm"} {
+		if _, err := os.Stat(filepath.Join(rootDir, name)); err == nil {
+			return nil
+		} else if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	body := "<!doctype html>\n" +
+		"<html lang=\"en\">\n" +
+		"<head><meta charset=\"utf-8\"><title>" + domain + "</title></head>\n" +
+		"<body><h1>" + domain + "</h1><p>Site created by aiPanel.</p></body>\n" +
+		"</html>\n"
+	return os.WriteFile(filepath.Join(rootDir, "index.html"), []byte(body), 0o644)
 }
 
 func withinBase(path, base string) bool {
