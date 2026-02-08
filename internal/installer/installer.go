@@ -825,7 +825,7 @@ func (i *Installer) prepareRuntimeCompatibility(
 		component := channel[componentName]
 		switch componentName {
 		case "nginx":
-			if err := i.ensureRuntimeNginxConfig(); err != nil {
+			if err := i.ensureRuntimeNginxConfig(ctx); err != nil {
 				return err
 			}
 			if err := i.ensureSymlink(
@@ -949,7 +949,7 @@ func (i *Installer) runtimePHPMajorMinorVersion(ctx context.Context) (string, er
 	return version, nil
 }
 
-func (i *Installer) ensureRuntimeNginxConfig() error {
+func (i *Installer) ensureRuntimeNginxConfig(ctx context.Context) error {
 	confDir := filepath.Join(i.opts.RuntimeInstallDir, "nginx", "current", "conf")
 	if err := os.MkdirAll(confDir, 0o750); err != nil {
 		return fmt.Errorf("create runtime nginx conf dir: %w", err)
@@ -965,21 +965,48 @@ func (i *Installer) ensureRuntimeNginxConfig() error {
 	); err != nil {
 		return fmt.Errorf("write runtime nginx fastcgi snippet: %w", err)
 	}
-	for _, dir := range []string{
+	runtimeTempDirs := []string{
 		"/var/log/nginx",
 		"/var/lib/nginx/body",
 		"/var/lib/nginx/proxy",
 		"/var/lib/nginx/fastcgi",
 		"/var/lib/nginx/uwsgi",
 		"/var/lib/nginx/scgi",
-	} {
-		if err := os.MkdirAll(pathInRootFS(i.opts.RootFSPath, dir), 0o750); err != nil {
+	}
+	resolvedTempDirs := make([]string, 0, len(runtimeTempDirs))
+	for _, dir := range runtimeTempDirs {
+		resolved := pathInRootFS(i.opts.RootFSPath, dir)
+		if err := os.MkdirAll(resolved, 0o750); err != nil {
 			return fmt.Errorf("create runtime nginx dir %s: %w", dir, err)
 		}
+		resolvedTempDirs = append(resolvedTempDirs, resolved)
 	}
 	confPath := filepath.Join(confDir, "nginx.conf")
 	if err := writeTextFile(confPath, sourceRuntimeNginxConf, 0o644); err != nil {
 		return fmt.Errorf("write runtime nginx config: %w", err)
+	}
+	if err := i.ensureRuntimeNginxTempDirPermissions(ctx, resolvedTempDirs); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (i *Installer) ensureRuntimeNginxTempDirPermissions(ctx context.Context, dirs []string) error {
+	if len(dirs) == 0 {
+		return nil
+	}
+	if _, err := i.runner.Run(ctx, "id", "-u", "www-data"); err != nil {
+		return fmt.Errorf("resolve nginx user www-data: %w", err)
+	}
+
+	chownArgs := append([]string{"-R", "www-data:www-data"}, dirs...)
+	if _, err := i.runner.Run(ctx, "chown", chownArgs...); err != nil {
+		return fmt.Errorf("set runtime nginx temp dir ownership: %w", err)
+	}
+	for _, dir := range dirs {
+		if _, err := i.runner.Run(ctx, "chmod", "750", dir); err != nil {
+			return fmt.Errorf("set runtime nginx temp dir permissions for %s: %w", dir, err)
+		}
 	}
 	return nil
 }
@@ -1543,7 +1570,7 @@ func (i *Installer) initDatabases(ctx context.Context) error {
 }
 
 func (i *Installer) configureNginx(ctx context.Context) error {
-	if err := i.ensureRuntimeNginxConfig(); err != nil {
+	if err := i.ensureRuntimeNginxConfig(ctx); err != nil {
 		return err
 	}
 	panelPort := parsePort(i.opts.Addr, "8080")

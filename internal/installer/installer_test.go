@@ -233,6 +233,32 @@ func TestCreateServiceUser_NewUser(t *testing.T) {
 	}
 }
 
+func TestEnsureRuntimeNginxConfig_SetsTempDirPermissions(t *testing.T) {
+	root := t.TempDir()
+	runner := &fakeRunner{}
+	opts := DefaultOptions()
+	opts.RootFSPath = root
+	opts.RuntimeInstallDir = filepath.Join(root, "opt", "aipanel", "runtime")
+
+	ins := &Installer{
+		opts:   opts,
+		runner: runner,
+		now:    time.Now,
+	}
+	if err := ins.ensureRuntimeNginxConfig(context.Background()); err != nil {
+		t.Fatalf("ensureRuntimeNginxConfig failed: %v", err)
+	}
+
+	joined := strings.Join(runner.commands, "\n")
+	if !strings.Contains(joined, "id -u www-data") {
+		t.Fatalf("expected www-data lookup command, got:\n%s", joined)
+	}
+	expectedProxyDir := filepath.Join(root, "var", "lib", "nginx", "proxy")
+	if !strings.Contains(joined, "chown -R www-data:www-data") || !strings.Contains(joined, expectedProxyDir) {
+		t.Fatalf("expected chown command for nginx temp dirs, got:\n%s", joined)
+	}
+}
+
 func TestInstallerRun_SourceBuildCompilesRuntime(t *testing.T) {
 	root := t.TempDir()
 	srcBinary := filepath.Join(root, "src", "aipanel")
