@@ -56,6 +56,30 @@ func (r *fakeRunnerShellBuild) Run(ctx context.Context, name string, args ...str
 	return "", nil
 }
 
+type fakeLiveRunner struct {
+	runCalled     bool
+	runLiveCalled bool
+}
+
+func (r *fakeLiveRunner) Run(_ context.Context, _ string, _ ...string) (string, error) {
+	r.runCalled = true
+	return "non-stream output", nil
+}
+
+func (r *fakeLiveRunner) RunLive(
+	_ context.Context,
+	_ string,
+	_ []string,
+	onLine func(string, bool),
+) (string, error) {
+	r.runLiveCalled = true
+	if onLine != nil {
+		onLine("line from stdout", false)
+		onLine("line from stderr", true)
+	}
+	return "line from stdout\nline from stderr", nil
+}
+
 func TestIsDebian13(t *testing.T) {
 	if !isDebian13(map[string]string{"ID": "debian", "VERSION_CODENAME": "trixie"}) {
 		t.Fatal("expected debian trixie to pass")
@@ -259,6 +283,42 @@ func TestEnsureRuntimeNginxConfig_SetsTempDirPermissions(t *testing.T) {
 	expectedProxyDir := filepath.Join(root, "var", "lib", "nginx", "proxy")
 	if !strings.Contains(joined, "chown -R www-data:www-data") || !strings.Contains(joined, expectedProxyDir) {
 		t.Fatalf("expected chown command for nginx temp dirs, got:\n%s", joined)
+	}
+}
+
+func TestCommandLoggingRunner_UsesLiveStreaming(t *testing.T) {
+	streamRunner := &fakeLiveRunner{}
+	var logs []string
+	runner := commandLoggingRunner{
+		delegate: streamRunner,
+		logf: func(format string, args ...any) {
+			logs = append(logs, fmt.Sprintf(format, args...))
+		},
+	}
+
+	out, err := runner.Run(context.Background(), "echo", "hello")
+	if err != nil {
+		t.Fatalf("command run failed: %v", err)
+	}
+	if out == "" {
+		t.Fatal("expected output from live runner")
+	}
+	if !streamRunner.runLiveCalled {
+		t.Fatal("expected RunLive to be used")
+	}
+	if streamRunner.runCalled {
+		t.Fatal("did not expect fallback Run call when live runner is available")
+	}
+
+	joined := strings.Join(logs, "\n")
+	if !strings.Contains(joined, "[command][stdout] line from stdout") {
+		t.Fatalf("expected streamed stdout log, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "[command][stderr] line from stderr") {
+		t.Fatalf("expected streamed stderr log, got:\n%s", joined)
+	}
+	if strings.Contains(joined, "[command] output:") {
+		t.Fatalf("did not expect buffered output log when live streaming is used, got:\n%s", joined)
 	}
 }
 

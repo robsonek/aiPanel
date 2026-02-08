@@ -30,7 +30,7 @@
         "public_key_fingerprint": "D95C03BC702BE9515344AE3374E44BC9067701A5",
         "build": {
           "commands": [
-            "./configure --prefix={{install_dir}} --enable-fpm --with-fpm-user=www-data --with-fpm-group=www-data --with-zlib --with-openssl",
+            "./configure --prefix={{install_dir}} --enable-fpm --with-fpm-user=www-data --with-fpm-group=www-data --with-zlib --with-openssl --with-mysqli=mysqlnd --with-pdo-mysql=mysqlnd --enable-mbstring",
             "make -j$(nproc)",
             "make install"
           ]
@@ -86,7 +86,7 @@
         "public_key_fingerprint": "D95C03BC702BE9515344AE3374E44BC9067701A5",
         "build": {
           "commands": [
-            "./configure --prefix={{install_dir}} --enable-fpm --with-fpm-user=www-data --with-fpm-group=www-data --with-zlib --with-openssl",
+            "./configure --prefix={{install_dir}} --enable-fpm --with-fpm-user=www-data --with-fpm-group=www-data --with-zlib --with-openssl --with-mysqli=mysqlnd --with-pdo-mysql=mysqlnd --enable-mbstring",
             "make -j$(nproc)",
             "make install"
           ]

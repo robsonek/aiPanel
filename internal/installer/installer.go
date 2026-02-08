@@ -363,13 +363,32 @@ func (r commandLoggingRunner) Run(ctx context.Context, name string, args ...stri
 	if r.logf != nil {
 		r.logf("[command] start: %s", command)
 	}
-	out, err := r.delegate.Run(ctx, name, args...)
+	var (
+		out           string
+		err           error
+		liveStreaming bool
+	)
+	if liveRunner, ok := r.delegate.(systemd.LiveRunner); ok {
+		liveStreaming = true
+		out, err = liveRunner.RunLive(ctx, name, args, func(line string, isStderr bool) {
+			if r.logf == nil {
+				return
+			}
+			if isStderr {
+				r.logf("[command][stderr] %s", line)
+				return
+			}
+			r.logf("[command][stdout] %s", line)
+		})
+	} else {
+		out, err = r.delegate.Run(ctx, name, args...)
+	}
 	duration := time.Since(startedAt).Round(time.Millisecond)
 	trimmedOut := strings.TrimSpace(out)
 	if err != nil {
 		if r.logf != nil {
 			r.logf("[command] failed after %s: %s", duration, command)
-			if trimmedOut != "" {
+			if !liveStreaming && trimmedOut != "" {
 				r.logf("[command] output:\n%s", trimmedOut)
 			}
 			r.logf("[command] error: %v", err)
@@ -378,7 +397,7 @@ func (r commandLoggingRunner) Run(ctx context.Context, name string, args ...stri
 	}
 	if r.logf != nil {
 		r.logf("[command] ok after %s: %s", duration, command)
-		if trimmedOut != "" {
+		if !liveStreaming && trimmedOut != "" {
 			r.logf("[command] output:\n%s", trimmedOut)
 		}
 	}
@@ -609,6 +628,7 @@ func (i *Installer) installPackages(ctx context.Context) error {
 		"ca-certificates",
 		"cmake",
 		"gnupg",
+		"libonig-dev",
 		"libncurses-dev",
 		"libpcre2-dev",
 		"libreadline-dev",
