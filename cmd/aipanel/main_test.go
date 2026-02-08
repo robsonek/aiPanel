@@ -201,6 +201,7 @@ func TestPromptInstallOptions_CustomMode(t *testing.T) {
 		"VeryStrongPass123!",
 		"edge",
 		"y",
+		"y",
 		"panel.example.com",
 		"y",
 		"tls-admin@example.com",
@@ -256,6 +257,7 @@ func TestPromptInstallOptions_CustomModeRePromptsShortPassword(t *testing.T) {
 		"stable",
 		"n",
 		"n",
+		"n",
 		"y",
 	}, "\n") + "\n"
 	out := &bytes.Buffer{}
@@ -299,6 +301,24 @@ func TestInstallFlagValuesToOptions_OnlyStep(t *testing.T) {
 	}
 	if opts.OnlyStep != "install_phpmyadmin" {
 		t.Fatalf("only step mismatch: got %q", opts.OnlyStep)
+	}
+}
+
+func TestInstallFlagValuesToOptions_OnlyStepPGAdminEnablesPGAdmin(t *testing.T) {
+	defaults := installer.DefaultOptions()
+	fs, values := newInstallFlagSet(defaults)
+	if err := fs.Parse([]string{"--only", "install_pgadmin"}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+	opts, _, err := values.toOptions(defaults)
+	if err != nil {
+		t.Fatalf("toOptions error: %v", err)
+	}
+	if opts.OnlyStep != "install_pgadmin" {
+		t.Fatalf("only step mismatch: got %q", opts.OnlyStep)
+	}
+	if opts.SkipPGAdmin {
+		t.Fatal("expected pgAdmin to be enabled for install_pgadmin only step")
 	}
 }
 

@@ -114,6 +114,17 @@ func TestOptionsValidate(t *testing.T) {
 		}
 	})
 
+	t.Run("only pgadmin does not require runtime lock", func(t *testing.T) {
+		opts := DefaultOptions()
+		opts.OnlyStep = steps.InstallPGAdmin
+		opts.RuntimeLockPath = ""
+		opts.RuntimeManifestURL = ""
+		opts.RuntimeInstallDir = ""
+		if err := opts.validate(); err != nil {
+			t.Fatalf("expected valid options for only pgadmin step, got %v", err)
+		}
+	})
+
 	t.Run("runtime service aliases are valid in only mode", func(t *testing.T) {
 		opts := DefaultOptions()
 		opts.OnlyStep = "postgresql,mysql,php,nginx"
@@ -171,6 +182,12 @@ func TestOptionsWithDefaults(t *testing.T) {
 	}
 	if opts.PHPMyAdminURL == "" || opts.PHPMyAdminSHA256URL == "" || opts.PHPMyAdminInstallDir == "" {
 		t.Fatal("expected phpMyAdmin defaults to be set")
+	}
+	if opts.PGAdminURL == "" || opts.PGAdminInstallDir == "" || opts.PGAdminListenAddr == "" || opts.PGAdminRoutePath == "" {
+		t.Fatal("expected pgAdmin defaults to be set")
+	}
+	if !opts.SkipPGAdmin {
+		t.Fatal("expected pgAdmin to be disabled by default")
 	}
 	if opts.LetsEncryptWebroot == "" {
 		t.Fatal("expected letsencrypt webroot default to be set")

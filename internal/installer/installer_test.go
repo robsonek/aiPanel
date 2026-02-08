@@ -778,6 +778,78 @@ func TestInstallerRun_OnlyInstallPHPMyAdminRequiresRoot(t *testing.T) {
 	}
 }
 
+func TestInstallerRun_OnlyInstallPGAdmin(t *testing.T) {
+	root := t.TempDir()
+	archivePath := filepath.Join(root, "pgadmin.tar.gz")
+	if err := writeTarGzArtifactEntries(archivePath, map[string][]byte{
+		"pgadmin4-9.12/requirements.txt": []byte(""),
+		"pgadmin4-9.12/web/pgAdmin4.py":  []byte("print('ok')"),
+		"pgadmin4-9.12/web/setup.py":     []byte("print('setup')"),
+	}); err != nil {
+		t.Fatalf("write pgadmin archive: %v", err)
+	}
+	sum, err := fileSHA256(archivePath)
+	if err != nil {
+		t.Fatalf("checksum pgadmin archive: %v", err)
+	}
+
+	opts := DefaultOptions()
+	opts.OnlyStep = steps.InstallPGAdmin
+	opts.RootFSPath = root
+	opts.StateFilePath = filepath.Join(root, "var", "lib", "aipanel", ".installer-state.json")
+	opts.ReportFilePath = filepath.Join(root, "var", "lib", "aipanel", "install-report.json")
+	opts.LogFilePath = filepath.Join(root, "var", "log", "aipanel", "install.log")
+	opts.PGAdminURL = "file://" + archivePath
+	opts.PGAdminSHA256 = sum
+	opts.PGAdminSignatureURL = ""
+	opts.PGAdminFingerprint = ""
+	opts.VerifyUpstreamSources = false
+	opts.PGAdminInstallDir = "/var/lib/aipanel/pgadmin4"
+	opts.PGAdminVenvDir = "/var/lib/aipanel/pgadmin4-venv"
+	opts.PGAdminDataDir = "/var/lib/aipanel/pgadmin-data"
+	opts.PGAdminListenAddr = "127.0.0.1:5050"
+	opts.PGAdminRoutePath = "/pgadmin"
+	opts.RuntimeInstallDir = filepath.Join(root, "opt", "aipanel", "runtime")
+	opts.NginxSitesAvailableDir = filepath.Join(root, "etc", "nginx", "sites-available")
+	opts.NginxSitesEnabledDir = filepath.Join(root, "etc", "nginx", "sites-enabled")
+
+	runner := &fakeRunner{}
+	ins := New(opts, runner)
+	report, err := ins.Run(context.Background())
+	if err != nil {
+		t.Fatalf("installer run failed: %v", err)
+	}
+	if report.Status != "ok" {
+		t.Fatalf("expected report status ok, got %q", report.Status)
+	}
+	if len(report.Steps) != 1 {
+		t.Fatalf("expected exactly one step in report, got %d", len(report.Steps))
+	}
+	if report.Steps[0].Name != steps.InstallPGAdmin {
+		t.Fatalf("expected only %s step, got %s", steps.InstallPGAdmin, report.Steps[0].Name)
+	}
+
+	installedEntrypoint := filepath.Join(root, "var", "lib", "aipanel", "pgadmin4", "web", "pgAdmin4.py")
+	if _, err := os.Stat(installedEntrypoint); err != nil {
+		t.Fatalf("expected pgAdmin entrypoint at %s: %v", installedEntrypoint, err)
+	}
+	configLocal := filepath.Join(root, "var", "lib", "aipanel", "pgadmin4", "web", "config_local.py")
+	if _, err := os.Stat(configLocal); err != nil {
+		t.Fatalf("expected config_local.py at %s: %v", configLocal, err)
+	}
+
+	joined := strings.Join(runner.commands, "\n")
+	if !strings.Contains(joined, "python3 -m venv") {
+		t.Fatalf("expected virtualenv setup command, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "setup.py setup-db") {
+		t.Fatalf("expected pgAdmin setup-db command, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "systemctl enable --now aipanel-pgadmin.service") {
+		t.Fatalf("expected pgAdmin service enable command, got:\n%s", joined)
+	}
+}
+
 func writeTarGzArtifact(path string, name string, content []byte) error {
 	return writeTarGzArtifactEntries(path, map[string][]byte{
 		name: content,

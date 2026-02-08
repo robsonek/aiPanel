@@ -18,6 +18,7 @@ const (
 	ConfigureTLS      = "configure_tls"
 	ConfigurePHP      = "configure_phpfpm"
 	InstallPHPMyAdmin = "install_phpmyadmin"
+	InstallPGAdmin    = "install_pgadmin"
 	WriteUnit         = "write_systemd_unit"
 	StartPanel        = "start_panel_service"
 	CreateAdmin       = "create_admin"
@@ -42,6 +43,7 @@ var Ordered = []string{
 	ConfigureTLS,
 	ConfigurePHP,
 	InstallPHPMyAdmin,
+	InstallPGAdmin,
 	WriteUnit,
 	StartPanel,
 	CreateAdmin,

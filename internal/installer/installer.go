@@ -43,6 +43,16 @@ const (
 	defaultPHPMyAdminURL        = "https://files.phpmyadmin.net/phpMyAdmin/5.2.3/phpMyAdmin-5.2.3-all-languages.tar.gz"
 	defaultPHPMyAdminSHA256URL  = "https://files.phpmyadmin.net/phpMyAdmin/5.2.3/phpMyAdmin-5.2.3-all-languages.tar.gz.sha256"
 	defaultPHPMyAdminInstallDir = "/usr/share/phpmyadmin"
+	defaultPGAdminURL           = "https://ftp.postgresql.org/pub/pgadmin/pgadmin4/v9.12/source/pgadmin4-9.12.tar.gz"
+	defaultPGAdminSHA256        = "f72f5d688eed9f65d523046492ce868bcb4251c04f763cb6b834b13be0ad6744"
+	defaultPGAdminSignatureURL  = "https://ftp.postgresql.org/pub/pgadmin/pgadmin4/v9.12/source/pgadmin4-9.12.tar.gz.asc"
+	defaultPGAdminFingerprint   = "E8697E2EEF76C02D3A6332778881B2A8210976F2"
+	defaultPGAdminInstallDir    = "/var/lib/aipanel/pgadmin4"
+	defaultPGAdminVenvDir       = "/var/lib/aipanel/pgadmin4-venv"
+	defaultPGAdminDataDir       = "/var/lib/aipanel/pgadmin-data"
+	defaultPGAdminListenAddr    = "127.0.0.1:5050"
+	defaultPGAdminRoutePath     = "/pgadmin"
+	defaultPGAdminUnitName      = "aipanel-pgadmin.service"
 	defaultLetsEncryptWebroot   = "/var/www/letsencrypt"
 )
 
@@ -72,6 +82,16 @@ type Options struct {
 	PHPMyAdminSHA256URL   string
 	PHPMyAdminInstallDir  string
 	SkipPHPMyAdmin        bool
+	PGAdminURL            string
+	PGAdminSHA256         string
+	PGAdminSignatureURL   string
+	PGAdminFingerprint    string
+	PGAdminInstallDir     string
+	PGAdminVenvDir        string
+	PGAdminDataDir        string
+	PGAdminListenAddr     string
+	PGAdminRoutePath      string
+	SkipPGAdmin           bool
 	EnableLetsEncrypt     bool
 	LetsEncryptEmail      string
 	LetsEncryptWebroot    string
@@ -132,6 +152,16 @@ func DefaultOptions() Options {
 		PHPMyAdminURL:          defaultPHPMyAdminURL,
 		PHPMyAdminSHA256URL:    defaultPHPMyAdminSHA256URL,
 		PHPMyAdminInstallDir:   defaultPHPMyAdminInstallDir,
+		PGAdminURL:             defaultPGAdminURL,
+		PGAdminSHA256:          defaultPGAdminSHA256,
+		PGAdminSignatureURL:    defaultPGAdminSignatureURL,
+		PGAdminFingerprint:     defaultPGAdminFingerprint,
+		PGAdminInstallDir:      defaultPGAdminInstallDir,
+		PGAdminVenvDir:         defaultPGAdminVenvDir,
+		PGAdminDataDir:         defaultPGAdminDataDir,
+		PGAdminListenAddr:      defaultPGAdminListenAddr,
+		PGAdminRoutePath:       defaultPGAdminRoutePath,
+		SkipPGAdmin:            true,
 		EnableLetsEncrypt:      false,
 		LetsEncryptEmail:       "",
 		LetsEncryptWebroot:     defaultLetsEncryptWebroot,
@@ -154,6 +184,16 @@ func DefaultOptions() Options {
 
 func (o Options) withDefaults() Options {
 	d := DefaultOptions()
+	if !o.SkipPGAdmin &&
+		strings.TrimSpace(o.PGAdminURL) == "" &&
+		strings.TrimSpace(o.PGAdminInstallDir) == "" &&
+		strings.TrimSpace(o.PGAdminVenvDir) == "" &&
+		strings.TrimSpace(o.PGAdminDataDir) == "" &&
+		strings.TrimSpace(o.PGAdminListenAddr) == "" &&
+		strings.TrimSpace(o.PGAdminRoutePath) == "" &&
+		strings.TrimSpace(o.OnlyStep) == "" {
+		o.SkipPGAdmin = d.SkipPGAdmin
+	}
 	if strings.TrimSpace(o.Addr) == "" {
 		o.Addr = d.Addr
 	}
@@ -213,6 +253,33 @@ func (o Options) withDefaults() Options {
 	}
 	if strings.TrimSpace(o.PHPMyAdminInstallDir) == "" {
 		o.PHPMyAdminInstallDir = d.PHPMyAdminInstallDir
+	}
+	if strings.TrimSpace(o.PGAdminURL) == "" {
+		o.PGAdminURL = d.PGAdminURL
+	}
+	if strings.TrimSpace(o.PGAdminSHA256) == "" {
+		o.PGAdminSHA256 = d.PGAdminSHA256
+	}
+	if strings.TrimSpace(o.PGAdminSignatureURL) == "" {
+		o.PGAdminSignatureURL = d.PGAdminSignatureURL
+	}
+	if strings.TrimSpace(o.PGAdminFingerprint) == "" {
+		o.PGAdminFingerprint = d.PGAdminFingerprint
+	}
+	if strings.TrimSpace(o.PGAdminInstallDir) == "" {
+		o.PGAdminInstallDir = d.PGAdminInstallDir
+	}
+	if strings.TrimSpace(o.PGAdminVenvDir) == "" {
+		o.PGAdminVenvDir = d.PGAdminVenvDir
+	}
+	if strings.TrimSpace(o.PGAdminDataDir) == "" {
+		o.PGAdminDataDir = d.PGAdminDataDir
+	}
+	if strings.TrimSpace(o.PGAdminListenAddr) == "" {
+		o.PGAdminListenAddr = d.PGAdminListenAddr
+	}
+	if strings.TrimSpace(o.PGAdminRoutePath) == "" {
+		o.PGAdminRoutePath = d.PGAdminRoutePath
 	}
 	if strings.TrimSpace(o.LetsEncryptWebroot) == "" {
 		o.LetsEncryptWebroot = d.LetsEncryptWebroot
@@ -298,6 +365,30 @@ func (o Options) validate() error {
 		}
 		if strings.TrimSpace(o.PHPMyAdminInstallDir) == "" {
 			return fmt.Errorf("phpMyAdmin install dir is required")
+		}
+	}
+	installPGAdmin := !o.SkipPGAdmin || strings.EqualFold(strings.TrimSpace(o.OnlyStep), steps.InstallPGAdmin)
+	if installPGAdmin {
+		if strings.TrimSpace(o.PGAdminURL) == "" {
+			return fmt.Errorf("pgAdmin source URL is required")
+		}
+		if strings.TrimSpace(o.PGAdminInstallDir) == "" {
+			return fmt.Errorf("pgAdmin install dir is required")
+		}
+		if strings.TrimSpace(o.PGAdminVenvDir) == "" {
+			return fmt.Errorf("pgAdmin venv dir is required")
+		}
+		if strings.TrimSpace(o.PGAdminDataDir) == "" {
+			return fmt.Errorf("pgAdmin data dir is required")
+		}
+		if strings.TrimSpace(o.PGAdminRoutePath) == "" {
+			return fmt.Errorf("pgAdmin route path is required")
+		}
+		if !strings.HasPrefix(strings.TrimSpace(o.PGAdminRoutePath), "/") {
+			return fmt.Errorf("pgAdmin route path must start with /")
+		}
+		if _, _, err := net.SplitHostPort(strings.TrimSpace(o.PGAdminListenAddr)); err != nil {
+			return fmt.Errorf("invalid pgAdmin listen address %q: %w", o.PGAdminListenAddr, err)
 		}
 	}
 	if o.ReverseProxy && strings.TrimSpace(o.PanelDomain) == "" {
@@ -606,6 +697,7 @@ func (i *Installer) Run(ctx context.Context) (*Report, error) {
 		{name: steps.ConfigureTLS, fn: i.configureTLS},
 		{name: steps.ConfigurePHP, fn: i.configurePHPFPM},
 		{name: steps.InstallPHPMyAdmin, fn: i.installPHPMyAdmin},
+		{name: steps.InstallPGAdmin, fn: i.installPGAdmin},
 		{name: steps.WriteUnit, fn: i.writeUnitFile},
 		{name: steps.StartPanel, fn: i.startPanelService},
 		{name: steps.CreateAdmin, fn: i.createAdminUser},
@@ -2009,6 +2101,9 @@ type panelVhostTemplateData struct {
 	EnableTLS   bool
 	TLSCertPath string
 	TLSKeyPath  string
+	EnablePGAdmin bool
+	PGAdminPath   string
+	PGAdminPort   string
 }
 
 func (i *Installer) configureNginx(ctx context.Context) error {
@@ -2032,6 +2127,9 @@ func (i *Installer) configureNginx(ctx context.Context) error {
 	if acmeWebroot == "" {
 		acmeWebroot = defaultLetsEncryptWebroot
 	}
+	pgAdminPath := normalizeWebSubpath(i.opts.PGAdminRoutePath, defaultPGAdminRoutePath)
+	pgAdminPort := parsePort(i.opts.PGAdminListenAddr, "5050")
+	enablePGAdmin := i.isPGAdminInstalled()
 	enableTLS := false
 	tlsCertPath := ""
 	tlsKeyPath := ""
@@ -2049,13 +2147,16 @@ func (i *Installer) configureNginx(ctx context.Context) error {
 		i.opts.PanelVhostTemplatePath,
 		defaultPanelVhostTemplate,
 		panelVhostTemplateData{
-			PanelPort:   panelPort,
-			PanelHost:   panelHost,
-			PHPVersion:  phpVersion,
-			ACMEWebroot: acmeWebroot,
-			EnableTLS:   enableTLS,
-			TLSCertPath: tlsCertPath,
-			TLSKeyPath:  tlsKeyPath,
+			PanelPort:     panelPort,
+			PanelHost:     panelHost,
+			PHPVersion:    phpVersion,
+			ACMEWebroot:   acmeWebroot,
+			EnableTLS:     enableTLS,
+			TLSCertPath:   tlsCertPath,
+			TLSKeyPath:    tlsKeyPath,
+			EnablePGAdmin: enablePGAdmin,
+			PGAdminPath:   pgAdminPath,
+			PGAdminPort:   pgAdminPort,
 		},
 	)
 	if err != nil {
@@ -2341,6 +2442,277 @@ func (i *Installer) ensurePHPMyAdminPermissions(ctx context.Context, installDir 
 		return fmt.Errorf("set phpMyAdmin permissions: %w", err)
 	}
 	return nil
+}
+
+func (i *Installer) installPGAdmin(ctx context.Context) error {
+	if i.opts.SkipPGAdmin && !strings.EqualFold(i.opts.OnlyStep, steps.InstallPGAdmin) {
+		i.logf("[install_pgadmin] skipped by configuration")
+		return nil
+	}
+
+	if err := i.ensurePGAdminPrerequisites(ctx); err != nil {
+		return err
+	}
+
+	if _, err := i.runner.Run(ctx, "id", "aipanel"); err != nil {
+		if _, createErr := i.runner.Run(
+			ctx,
+			"useradd",
+			"--system",
+			"--no-create-home",
+			"--shell", "/usr/sbin/nologin",
+			"aipanel",
+		); createErr != nil {
+			return fmt.Errorf("create aipanel user for pgAdmin: %w", createErr)
+		}
+	}
+
+	installDir := pathInRootFS(i.opts.RootFSPath, i.opts.PGAdminInstallDir)
+	venvDir := pathInRootFS(i.opts.RootFSPath, i.opts.PGAdminVenvDir)
+	dataDir := pathInRootFS(i.opts.RootFSPath, i.opts.PGAdminDataDir)
+
+	entrypoint := filepath.Join(installDir, "web", "pgAdmin4.py")
+	if _, err := os.Stat(entrypoint); err == nil {
+		i.logf("[install_pgadmin] existing installation detected at %s, keeping source tree", installDir)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect pgAdmin install dir: %w", err)
+	} else {
+		archiveData, downloadErr := i.downloadBytes(ctx, i.opts.PGAdminURL)
+		if downloadErr != nil {
+			return fmt.Errorf("download pgAdmin archive: %w", downloadErr)
+		}
+		actualChecksum := fmt.Sprintf("%x", sha256.Sum256(archiveData))
+		expectedChecksum := strings.TrimSpace(i.opts.PGAdminSHA256)
+		if expectedChecksum != "" && !strings.EqualFold(expectedChecksum, actualChecksum) {
+			return fmt.Errorf("pgAdmin checksum mismatch: expected %s got %s", expectedChecksum, actualChecksum)
+		}
+		i.logf("[install_pgadmin] checksum verified: %s", actualChecksum)
+
+		archivePath, writeErr := writeTempBytes("aipanel-pgadmin-*.tar.gz", archiveData)
+		if writeErr != nil {
+			return fmt.Errorf("write pgAdmin archive temp file: %w", writeErr)
+		}
+		defer func() {
+			_ = os.Remove(archivePath)
+		}()
+
+		if i.opts.VerifyUpstreamSources &&
+			strings.TrimSpace(i.opts.PGAdminSignatureURL) != "" &&
+			strings.TrimSpace(i.opts.PGAdminFingerprint) != "" {
+			if err := i.verifyPGAdminSignature(ctx, archivePath); err != nil {
+				return err
+			}
+		}
+
+		extractDir, mkErr := os.MkdirTemp("", "aipanel-pgadmin-*")
+		if mkErr != nil {
+			return fmt.Errorf("create pgAdmin extract dir: %w", mkErr)
+		}
+		defer func() {
+			_ = os.RemoveAll(extractDir)
+		}()
+
+		if err := extractArchive(archivePath, extractDir); err != nil {
+			return fmt.Errorf("extract pgAdmin archive: %w", err)
+		}
+
+		sourceDir, err := detectSourceDir(extractDir)
+		if err != nil {
+			return fmt.Errorf("detect pgAdmin source dir: %w", err)
+		}
+		if _, err := os.Stat(filepath.Join(sourceDir, "web", "pgAdmin4.py")); err != nil {
+			return fmt.Errorf("pgAdmin archive missing web/pgAdmin4.py: %w", err)
+		}
+
+		if err := os.MkdirAll(filepath.Dir(installDir), 0o750); err != nil {
+			return fmt.Errorf("create pgAdmin parent dir: %w", err)
+		}
+		if err := copyDirectory(sourceDir, installDir); err != nil {
+			return fmt.Errorf("copy pgAdmin files: %w", err)
+		}
+	}
+
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+		return fmt.Errorf("create pgAdmin data dir: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dataDir, "sessions"), 0o750); err != nil {
+		return fmt.Errorf("create pgAdmin sessions dir: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dataDir, "storage"), 0o750); err != nil {
+		return fmt.Errorf("create pgAdmin storage dir: %w", err)
+	}
+	if err := i.writePGAdminConfig(installDir, dataDir); err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(venvDir), 0o750); err != nil {
+		return fmt.Errorf("create pgAdmin venv parent dir: %w", err)
+	}
+	if _, err := i.runner.Run(ctx, "python3", "-m", "venv", venvDir); err != nil {
+		return fmt.Errorf("create pgAdmin venv: %w", err)
+	}
+
+	pipPath := filepath.Join(venvDir, "bin", "pip")
+	pythonPath := filepath.Join(venvDir, "bin", "python")
+	requirementsPath := filepath.Join(installDir, "requirements.txt")
+	setupPath := filepath.Join(installDir, "web", "setup.py")
+	if _, err := i.runner.Run(ctx, pipPath, "install", "--upgrade", "pip", "setuptools", "wheel"); err != nil {
+		return fmt.Errorf("upgrade pgAdmin pip tooling: %w", err)
+	}
+
+	postgresBin := filepath.Join(i.opts.RuntimeInstallDir, "postgresql", "current", "bin")
+	pipInstallCmd := strings.Join([]string{
+		"export PATH=" + shellQuote(postgresBin) + ":$PATH",
+		shellQuote(pipPath) + " install -r " + shellQuote(requirementsPath) + " gunicorn",
+	}, " && ")
+	if _, err := i.runner.Run(ctx, "bash", "-lc", pipInstallCmd); err != nil {
+		return fmt.Errorf("install pgAdmin Python dependencies: %w", err)
+	}
+
+	if _, err := i.runner.Run(ctx, pythonPath, setupPath, "setup-db"); err != nil {
+		return fmt.Errorf("initialize pgAdmin database: %w", err)
+	}
+	adminEmail := strings.TrimSpace(i.opts.AdminEmail)
+	if adminEmail == "" {
+		adminEmail = "admin@example.com"
+	}
+	adminPassword := strings.TrimSpace(i.opts.AdminPassword)
+	if output, err := i.runner.Run(
+		ctx,
+		pythonPath,
+		setupPath,
+		"add-user",
+		adminEmail,
+		adminPassword,
+		"--admin",
+	); err != nil {
+		combined := strings.ToLower(strings.TrimSpace(output + "\n" + err.Error()))
+		if !strings.Contains(combined, "already exists") &&
+			!strings.Contains(combined, "already present") &&
+			!strings.Contains(combined, "already in use") {
+			return fmt.Errorf("create pgAdmin admin user: %w", err)
+		}
+		i.logf("[install_pgadmin] admin user %s already exists", adminEmail)
+	}
+
+	if _, err := i.runner.Run(ctx, "chown", "-R", "aipanel:aipanel", installDir, venvDir, dataDir); err != nil {
+		return fmt.Errorf("set pgAdmin ownership: %w", err)
+	}
+
+	unitPath := pathInRootFS(i.opts.RootFSPath, filepath.Join("/etc/systemd/system", defaultPGAdminUnitName))
+	unitContent := renderPGAdminUnit(
+		installDir,
+		venvDir,
+		strings.TrimSpace(i.opts.PGAdminListenAddr),
+		normalizeWebSubpath(i.opts.PGAdminRoutePath, defaultPGAdminRoutePath),
+	)
+	if err := writeTextFile(unitPath, unitContent, 0o644); err != nil {
+		return fmt.Errorf("write pgAdmin systemd unit: %w", err)
+	}
+	if err := systemd.DaemonReload(ctx, i.runner); err != nil {
+		return fmt.Errorf("systemd daemon-reload for pgAdmin: %w", err)
+	}
+	if err := systemd.EnableNow(ctx, i.runner, defaultPGAdminUnitName); err != nil {
+		return fmt.Errorf("start pgAdmin service: %w", err)
+	}
+
+	if err := i.configureNginx(ctx); err != nil {
+		return fmt.Errorf("configure nginx for pgAdmin: %w", err)
+	}
+	i.logf("[install_pgadmin] installed at %s", installDir)
+	return nil
+}
+
+func (i *Installer) ensurePGAdminPrerequisites(ctx context.Context) error {
+	packages := []string{"python3", "python3-pip", "python3-venv"}
+	installArgs := append([]string{"install", "-y", "--no-install-recommends"}, packages...)
+	if _, err := i.runner.Run(ctx, "apt-get", installArgs...); err != nil {
+		return fmt.Errorf("apt install pgAdmin prerequisites: %w", err)
+	}
+	return nil
+}
+
+func (i *Installer) verifyPGAdminSignature(ctx context.Context, archivePath string) error {
+	signatureData, err := i.downloadBytes(ctx, strings.TrimSpace(i.opts.PGAdminSignatureURL))
+	if err != nil {
+		return fmt.Errorf("download pgAdmin signature: %w", err)
+	}
+	signaturePath, err := writeTempBytes("aipanel-pgadmin-signature-*", signatureData)
+	if err != nil {
+		return fmt.Errorf("write pgAdmin signature: %w", err)
+	}
+	defer func() {
+		_ = os.Remove(signaturePath)
+	}()
+
+	gnupgHome, err := os.MkdirTemp("", "aipanel-pgadmin-gpg-*")
+	if err != nil {
+		return fmt.Errorf("create pgAdmin gpg home: %w", err)
+	}
+	defer func() {
+		_ = os.RemoveAll(gnupgHome)
+	}()
+
+	fingerprint := strings.TrimSpace(i.opts.PGAdminFingerprint)
+	commands := []string{
+		"export GNUPGHOME=" + shellQuote(gnupgHome),
+		"gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys " + shellQuote(fingerprint) + " || true",
+		"if ! gpg --batch --list-keys --with-colons 2>/dev/null | grep -iq " + shellQuote(fingerprint) + "; then " +
+			"gpg --batch --keyserver hkps://keyserver.ubuntu.com --recv-keys " + shellQuote(fingerprint) + "; fi",
+		"gpg --batch --verify " + shellQuote(signaturePath) + " " + shellQuote(archivePath),
+	}
+	if _, err := i.runner.Run(ctx, "bash", "-lc", strings.Join(commands, " && ")); err != nil {
+		return fmt.Errorf("verify upstream signature for pgAdmin: %w", err)
+	}
+	return nil
+}
+
+func (i *Installer) writePGAdminConfig(installDir, dataDir string) error {
+	_, port, err := net.SplitHostPort(strings.TrimSpace(i.opts.PGAdminListenAddr))
+	if err != nil {
+		return fmt.Errorf("parse pgAdmin listen address: %w", err)
+	}
+	configBody := fmt.Sprintf(`import os
+
+DATA_DIR = %q
+LOG_FILE = os.path.join(DATA_DIR, "pgadmin4.log")
+SQLITE_PATH = os.path.join(DATA_DIR, "pgadmin4.db")
+SESSION_DB_PATH = os.path.join(DATA_DIR, "sessions")
+STORAGE_DIR = os.path.join(DATA_DIR, "storage")
+SERVER_MODE = True
+DEFAULT_SERVER = "127.0.0.1"
+DEFAULT_SERVER_PORT = %s
+UPGRADE_CHECK_ENABLED = False
+`, dataDir, port)
+	configPath := filepath.Join(installDir, "web", "config_local.py")
+	if err := writeTextFile(configPath, configBody, 0o640); err != nil {
+		return fmt.Errorf("write pgAdmin config_local.py: %w", err)
+	}
+	return nil
+}
+
+func renderPGAdminUnit(installDir, venvDir, listenAddr, routePath string) string {
+	pathValue := strings.TrimSpace(routePath)
+	if pathValue == "" {
+		pathValue = defaultPGAdminRoutePath
+	}
+	return fmt.Sprintf(`[Unit]
+Description=aiPanel pgAdmin web service
+After=network.target
+
+[Service]
+Type=simple
+User=aipanel
+Group=aipanel
+WorkingDirectory=%s/web
+Environment=SCRIPT_NAME=%s
+ExecStart=%s/bin/gunicorn --bind %s --workers=1 --threads=25 --chdir %s/web pgAdmin4:app
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+`, installDir, pathValue, venvDir, listenAddr, installDir)
 }
 
 func (i *Installer) createAdminUser(ctx context.Context) error {
@@ -2670,6 +3042,25 @@ func parsePort(addr, fallback string) string {
 	return port
 }
 
+func normalizeWebSubpath(path, fallback string) string {
+	cleaned := strings.TrimSpace(path)
+	if cleaned == "" {
+		cleaned = fallback
+	}
+	cleaned = "/" + strings.Trim(cleaned, "/")
+	if cleaned == "/" {
+		return fallback
+	}
+	return cleaned
+}
+
+func (i *Installer) isPGAdminInstalled() bool {
+	installDir := pathInRootFS(i.opts.RootFSPath, i.opts.PGAdminInstallDir)
+	entrypoint := filepath.Join(installDir, "web", "pgAdmin4.py")
+	_, err := os.Stat(entrypoint)
+	return err == nil
+}
+
 func letsEncryptCertificatePaths(domain string) (string, string) {
 	base := filepath.Join("/etc/letsencrypt/live", domain)
 	return filepath.Join(base, "fullchain.pem"), filepath.Join(base, "privkey.pem")
@@ -2759,6 +3150,21 @@ server {
         include snippets/fastcgi-php.conf;
         fastcgi_pass unix:/run/php/aipanel-default-{{ .PHPVersion }}.sock;
     }
+
+{{ if .EnablePGAdmin -}}
+    location = {{ .PGAdminPath }} {
+        return 301 {{ .PGAdminPath }}/;
+    }
+
+    location {{ .PGAdminPath }}/ {
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Script-Name {{ .PGAdminPath }};
+        proxy_pass http://127.0.0.1:{{ .PGAdminPort }}/;
+    }
+{{ end -}}
 
     location / {
         proxy_set_header Host $host;

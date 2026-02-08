@@ -260,6 +260,7 @@ type installFlagValues struct {
 	panelDomain     *string
 	letsEncrypt     *bool
 	letsEncryptMail *string
+	installPGAdmin  *bool
 	onlyStep        *string
 	skipHealthcheck *bool
 	dryRun          *bool
@@ -288,7 +289,8 @@ func newInstallFlagSet(defaults installer.Options) (*flag.FlagSet, *installFlagV
 		panelDomain:     fs.String("panel-domain", "", "panel domain for nginx server_name (required with --reverse-proxy)"),
 		letsEncrypt:     fs.Bool("lets-encrypt", defaults.EnableLetsEncrypt, "issue Let's Encrypt certificate for panel domain (requires --reverse-proxy)"),
 		letsEncryptMail: fs.String("lets-encrypt-email", defaults.LetsEncryptEmail, "email for Let's Encrypt registration (required with --lets-encrypt)"),
-		onlyStep:        fs.String("only", "", "run one installer step or runtime service alias (e.g. install_phpmyadmin, postgresql, mysql, php, nginx)"),
+		installPGAdmin:  fs.Bool("install-pgadmin", !defaults.SkipPGAdmin, "install pgAdmin (service + nginx route)"),
+		onlyStep:        fs.String("only", "", "run one installer step or runtime service alias (e.g. install_phpmyadmin, install_pgadmin, postgresql, mysql, php, nginx)"),
 		skipHealthcheck: fs.Bool("skip-healthcheck", false, "skip final /health check"),
 		dryRun:          fs.Bool("dry-run", false, "do not execute system commands"),
 	}
@@ -314,6 +316,10 @@ func (v *installFlagValues) toOptions(defaults installer.Options) (installer.Opt
 	opts.RuntimeManifestURL = strings.TrimSpace(*v.runtimeManifest)
 	opts.RuntimeInstallDir = strings.TrimSpace(*v.runtimeInstall)
 	opts.OnlyStep = strings.ToLower(strings.TrimSpace(*v.onlyStep))
+	opts.SkipPGAdmin = !*v.installPGAdmin
+	if strings.EqualFold(opts.OnlyStep, "install_pgadmin") {
+		opts.SkipPGAdmin = false
+	}
 	if err := applyReverseProxySettings(&opts, *v.reverseProxy, strings.TrimSpace(*v.panelDomain)); err != nil {
 		return installer.Options{}, false, err
 	}
@@ -380,6 +386,11 @@ func promptInstallOptions(defaults installer.Options, in io.Reader, out io.Write
 			return installer.Options{}, false, err
 		}
 		opts.RuntimeChannel = strings.ToLower(opts.RuntimeChannel)
+		installPGAdmin, promptErr := promptBool(reader, out, "Install pgAdmin (PostgreSQL web UI)", false)
+		if promptErr != nil {
+			return installer.Options{}, false, promptErr
+		}
+		opts.SkipPGAdmin = !installPGAdmin
 	}
 	enableReverseProxy, err := promptBool(reader, out, "Enable nginx reverse proxy for panel", false)
 	if err != nil {
