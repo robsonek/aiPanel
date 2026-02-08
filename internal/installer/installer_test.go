@@ -257,11 +257,23 @@ func TestHealthURL(t *testing.T) {
 }
 
 func TestCreateServiceUser_NewUser(t *testing.T) {
+	root := t.TempDir()
 	runner := &fakeRunnerWithErrors{
 		failCommands: map[string]bool{"id aipanel": true},
 	}
+	opts := DefaultOptions()
+	opts.RootFSPath = root
+	dataDir := pathInRootFS(root, opts.DataDir)
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatalf("mkdir data dir: %v", err)
+	}
+	panelDB := filepath.Join(dataDir, "panel.db")
+	if err := os.WriteFile(panelDB, []byte("db"), 0o644); err != nil {
+		t.Fatalf("write panel db: %v", err)
+	}
+
 	ins := &Installer{
-		opts:   DefaultOptions(),
+		opts:   opts,
 		runner: runner,
 		now:    time.Now,
 	}
@@ -274,6 +286,41 @@ func TestCreateServiceUser_NewUser(t *testing.T) {
 	}
 	if !strings.Contains(joined, "chown") {
 		t.Fatalf("expected chown command, got:\n%s", joined)
+	}
+}
+
+func TestCreateServiceUser_DoesNotChownRuntimeData(t *testing.T) {
+	root := t.TempDir()
+	runner := &fakeRunnerWithErrors{
+		failCommands: map[string]bool{"id aipanel": true},
+	}
+	opts := DefaultOptions()
+	opts.RootFSPath = root
+	dataDir := pathInRootFS(root, opts.DataDir)
+	runtimeDir := filepath.Join(dataDir, "runtime", "postgresql")
+	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
+		t.Fatalf("mkdir runtime dir: %v", err)
+	}
+	userFile := filepath.Join(dataDir, "audit.db")
+	if err := os.WriteFile(userFile, []byte("audit"), 0o644); err != nil {
+		t.Fatalf("write audit db: %v", err)
+	}
+
+	ins := &Installer{
+		opts:   opts,
+		runner: runner,
+		now:    time.Now,
+	}
+	if err := ins.createServiceUser(context.Background()); err != nil {
+		t.Fatalf("createServiceUser failed: %v", err)
+	}
+
+	joined := strings.Join(runner.commands, "\n")
+	if strings.Contains(joined, "chown -R aipanel:aipanel "+filepath.Join(dataDir, "runtime")) {
+		t.Fatalf("did not expect chown of runtime subtree, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "chown -R aipanel:aipanel "+userFile) {
+		t.Fatalf("expected chown for non-runtime data path, got:\n%s", joined)
 	}
 }
 

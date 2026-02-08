@@ -2058,14 +2058,32 @@ func (i *Installer) writeInstallerTemplates() error {
 }
 
 func (i *Installer) createServiceUser(ctx context.Context) error {
-	if _, err := i.runner.Run(ctx, "id", "aipanel"); err == nil {
-		return nil // user already exists
+	if _, err := i.runner.Run(ctx, "id", "aipanel"); err != nil {
+		if _, err := i.runner.Run(ctx, "useradd", "--system", "--no-create-home", "--shell", "/usr/sbin/nologin", "aipanel"); err != nil {
+			return fmt.Errorf("create aipanel user: %w", err)
+		}
 	}
-	if _, err := i.runner.Run(ctx, "useradd", "--system", "--no-create-home", "--shell", "/usr/sbin/nologin", "aipanel"); err != nil {
-		return fmt.Errorf("create aipanel user: %w", err)
+
+	dataDir := pathInRootFS(i.opts.RootFSPath, i.opts.DataDir)
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+		return fmt.Errorf("ensure data dir: %w", err)
 	}
-	if _, err := i.runner.Run(ctx, "chown", "-R", "aipanel:aipanel", i.opts.DataDir); err != nil {
-		return fmt.Errorf("chown data dir: %w", err)
+	if _, err := i.runner.Run(ctx, "chown", "aipanel:aipanel", dataDir); err != nil {
+		return fmt.Errorf("chown data dir root: %w", err)
+	}
+
+	entries, err := os.ReadDir(dataDir)
+	if err != nil {
+		return fmt.Errorf("list data dir: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.Name() == "runtime" {
+			continue
+		}
+		target := filepath.Join(dataDir, entry.Name())
+		if _, err := i.runner.Run(ctx, "chown", "-R", "aipanel:aipanel", target); err != nil {
+			return fmt.Errorf("chown data path %s: %w", target, err)
+		}
 	}
 	return nil
 }
