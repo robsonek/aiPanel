@@ -1359,8 +1359,9 @@ func (i *Installer) ensureRuntimePostgreSQLBootstrap(ctx context.Context) error 
 	dataRootDir := filepath.Clean(filepath.Dir(dataRuntimeDir))
 	dataParentDir := filepath.Clean(filepath.Dir(dataDir))
 	versionFile := filepath.Join(dataDir, "PG_VERSION")
+	versionExists := false
 	if _, err := os.Stat(versionFile); err == nil {
-		return nil
+		versionExists = true
 	} else if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("inspect runtime postgresql data dir: %w", err)
 	}
@@ -1416,6 +1417,9 @@ func (i *Installer) ensureRuntimePostgreSQLBootstrap(ctx context.Context) error 
 	}
 	if _, err := i.runner.Run(ctx, "chown", "-R", "postgres:postgres", runtimeDir, dataDir); err != nil {
 		return fmt.Errorf("set runtime postgresql ownership: %w", err)
+	}
+	if versionExists {
+		return nil
 	}
 
 	initdbBin := filepath.Join(runtimeDir, "bin", "initdb")

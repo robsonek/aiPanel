@@ -399,6 +399,40 @@ func TestEnsureRuntimePostgreSQLBootstrap_FixesDataParentPermissions(t *testing.
 	}
 }
 
+func TestEnsureRuntimePostgreSQLBootstrap_ReownsExistingData(t *testing.T) {
+	root := t.TempDir()
+	runner := &fakeRunner{}
+	opts := DefaultOptions()
+	opts.RootFSPath = root
+	opts.RuntimeInstallDir = filepath.Join(root, "opt", "aipanel", "runtime")
+	opts.DataDir = "/var/lib/aipanel"
+
+	dataDir := pathInRootFS(root, filepath.Join(opts.DataDir, "runtime", "postgresql"))
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		t.Fatalf("mkdir data dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, "PG_VERSION"), []byte("18"), 0o600); err != nil {
+		t.Fatalf("write PG_VERSION: %v", err)
+	}
+
+	ins := &Installer{
+		opts:   opts,
+		runner: runner,
+		now:    time.Now,
+	}
+	if err := ins.ensureRuntimePostgreSQLBootstrap(context.Background()); err != nil {
+		t.Fatalf("ensureRuntimePostgreSQLBootstrap failed: %v", err)
+	}
+
+	joined := strings.Join(runner.commands, "\n")
+	if !strings.Contains(joined, "chown -R postgres:postgres") {
+		t.Fatalf("expected postgres ownership command, got:\n%s", joined)
+	}
+	if strings.Contains(joined, "runuser -u postgres --") {
+		t.Fatalf("did not expect initdb for existing cluster, got:\n%s", joined)
+	}
+}
+
 func TestInstallPackages_IncludesCertbotWhenLetsEncryptEnabled(t *testing.T) {
 	runner := &fakeRunner{}
 	opts := DefaultOptions()
