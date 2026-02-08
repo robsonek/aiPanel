@@ -967,6 +967,7 @@ func (i *Installer) ensureRuntimeNginxConfig(ctx context.Context) error {
 	}
 	runtimeTempDirs := []string{
 		"/var/log/nginx",
+		"/var/lib/nginx",
 		"/var/lib/nginx/body",
 		"/var/lib/nginx/proxy",
 		"/var/lib/nginx/fastcgi",
