@@ -1,6 +1,6 @@
 server {
     listen 80;
-    server_name _;
+    server_name {{ .PanelHost }};
 
     access_log /var/log/nginx/aipanel.access.log;
     error_log /var/log/nginx/aipanel.error.log;

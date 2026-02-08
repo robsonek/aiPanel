@@ -56,6 +56,8 @@ type Options struct {
 	RuntimeManifestURL    string
 	RuntimeInstallDir     string
 	VerifyUpstreamSources bool
+	ReverseProxy          bool
+	PanelDomain           string
 
 	OSReleasePath string
 	MemInfoPath   string
@@ -107,6 +109,8 @@ func DefaultOptions() Options {
 		RuntimeManifestURL:     "",
 		RuntimeInstallDir:      "/opt/aipanel/runtime",
 		VerifyUpstreamSources:  true,
+		ReverseProxy:           false,
+		PanelDomain:            "_",
 		OSReleasePath:          "/etc/os-release",
 		MemInfoPath:            "/proc/meminfo",
 		Proc1ExePath:           "/proc/1/exe",
@@ -174,6 +178,9 @@ func (o Options) withDefaults() Options {
 	if strings.TrimSpace(o.RuntimeInstallDir) == "" {
 		o.RuntimeInstallDir = d.RuntimeInstallDir
 	}
+	if strings.TrimSpace(o.PanelDomain) == "" {
+		o.PanelDomain = d.PanelDomain
+	}
 	if strings.TrimSpace(o.OSReleasePath) == "" {
 		o.OSReleasePath = d.OSReleasePath
 	}
@@ -210,6 +217,9 @@ func (o Options) withDefaults() Options {
 	if o.MinDiskGB <= 0 {
 		o.MinDiskGB = d.MinDiskGB
 	}
+	if o.ReverseProxy {
+		o.Addr = net.JoinHostPort("127.0.0.1", parsePort(o.Addr, "8080"))
+	}
 	return o
 }
 
@@ -235,6 +245,9 @@ func (o Options) validate() error {
 	}
 	if isRuntimeSourceMode(mode) && strings.TrimSpace(o.RuntimeInstallDir) == "" {
 		return fmt.Errorf("%s mode requires runtime install dir", mode)
+	}
+	if o.ReverseProxy && strings.TrimSpace(o.PanelDomain) == "" {
+		return fmt.Errorf("panel domain is required when reverse proxy is enabled")
 	}
 	return nil
 }
@@ -1529,10 +1542,17 @@ func (i *Installer) configureNginx(ctx context.Context) error {
 		return err
 	}
 	panelPort := parsePort(i.opts.Addr, "8080")
+	panelHost := strings.TrimSpace(i.opts.PanelDomain)
+	if panelHost == "" {
+		panelHost = "_"
+	}
 	panelContent, err := renderTemplateWithFallback(
 		i.opts.PanelVhostTemplatePath,
 		defaultPanelVhostTemplate,
-		map[string]string{"PanelPort": panelPort},
+		map[string]string{
+			"PanelPort": panelPort,
+			"PanelHost": panelHost,
+		},
 	)
 	if err != nil {
 		return fmt.Errorf("render panel vhost template: %w", err)
@@ -1971,7 +1991,7 @@ func randomPassword() (string, error) {
 
 const defaultPanelVhostTemplate = `server {
     listen 80;
-    server_name _;
+    server_name {{ .PanelHost }};
 
     access_log /var/log/nginx/aipanel.access.log;
     error_log /var/log/nginx/aipanel.error.log;

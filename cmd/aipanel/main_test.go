@@ -161,7 +161,7 @@ func TestEnsureRequiredTools(t *testing.T) {
 
 func TestPromptInstallOptions_UsesDefaults(t *testing.T) {
 	defaults := installer.DefaultOptions()
-	input := "\n\n"
+	input := "\n\n\n"
 	out := &bytes.Buffer{}
 
 	opts, dryRun, err := promptInstallOptions(defaults, strings.NewReader(input), out)
@@ -184,7 +184,7 @@ func TestPromptInstallOptions_UsesDefaults(t *testing.T) {
 
 func TestPromptInstallOptions_Cancel(t *testing.T) {
 	defaults := installer.DefaultOptions()
-	input := "\nn\n"
+	input := "\n\nn\n"
 
 	_, _, err := promptInstallOptions(defaults, strings.NewReader(input), &bytes.Buffer{})
 	if !errors.Is(err, errInstallCancelled) {
@@ -200,6 +200,8 @@ func TestPromptInstallOptions_CustomMode(t *testing.T) {
 		"ops@example.com",
 		"VeryStrongPass123!",
 		"edge",
+		"y",
+		"panel.example.com",
 		"n",
 		"y",
 	}, "\n") + "\n"
@@ -212,7 +214,7 @@ func TestPromptInstallOptions_CustomMode(t *testing.T) {
 	if dryRun {
 		t.Fatal("expected dryRun=false")
 	}
-	if opts.Addr != ":18080" {
+	if opts.Addr != "127.0.0.1:18080" {
 		t.Fatalf("addr mismatch: got %q", opts.Addr)
 	}
 	if opts.AdminEmail != "ops@example.com" {
@@ -226,5 +228,19 @@ func TestPromptInstallOptions_CustomMode(t *testing.T) {
 	}
 	if opts.RuntimeManifestURL != defaults.RuntimeManifestURL {
 		t.Fatalf("runtime manifest should stay default, got %q", opts.RuntimeManifestURL)
+	}
+	if !opts.ReverseProxy {
+		t.Fatal("expected reverse proxy enabled")
+	}
+	if opts.PanelDomain != "panel.example.com" {
+		t.Fatalf("panel domain mismatch: got %q", opts.PanelDomain)
+	}
+}
+
+func TestApplyReverseProxySettings_RequiresDomain(t *testing.T) {
+	opts := installer.DefaultOptions()
+	err := applyReverseProxySettings(&opts, true, "")
+	if err == nil {
+		t.Fatal("expected error for missing domain")
 	}
 }

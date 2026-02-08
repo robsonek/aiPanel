@@ -41,6 +41,16 @@ func TestOptionsValidate(t *testing.T) {
 			t.Fatalf("expected source-build dependency validation error, got %v", err)
 		}
 	})
+
+	t.Run("reverse proxy requires panel domain", func(t *testing.T) {
+		opts := DefaultOptions()
+		opts.ReverseProxy = true
+		opts.PanelDomain = ""
+		err := opts.validate()
+		if err == nil || !strings.Contains(err.Error(), "panel domain is required") {
+			t.Fatalf("expected reverse proxy panel domain validation error, got %v", err)
+		}
+	})
 }
 
 func TestOptionsWithDefaults(t *testing.T) {
@@ -58,5 +68,8 @@ func TestOptionsWithDefaults(t *testing.T) {
 	}
 	if opts.RuntimeInstallDir == "" {
 		t.Fatal("expected runtime install dir default to be set")
+	}
+	if opts.PanelDomain == "" {
+		t.Fatal("expected panel domain default to be set")
 	}
 }

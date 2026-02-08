@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -227,7 +228,11 @@ func runInstall(args []string) {
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
-	opts, dryRun := values.toOptions(defaults)
+	opts, dryRun, err := values.toOptions(defaults)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(2)
+	}
 	runInstaller(opts, dryRun)
 }
 
@@ -248,6 +253,8 @@ type installFlagValues struct {
 	runtimeLockPath *string
 	runtimeManifest *string
 	runtimeInstall  *string
+	reverseProxy    *bool
+	panelDomain     *string
 	skipHealthcheck *bool
 	dryRun          *bool
 }
@@ -271,13 +278,15 @@ func newInstallFlagSet(defaults installer.Options) (*flag.FlagSet, *installFlagV
 		runtimeLockPath: fs.String("runtime-lock-path", defaults.RuntimeLockPath, "runtime source lock file path"),
 		runtimeManifest: fs.String("runtime-manifest-url", defaults.RuntimeManifestURL, "runtime manifest URL (optional)"),
 		runtimeInstall:  fs.String("runtime-install-dir", defaults.RuntimeInstallDir, "runtime install directory for source runtime modes"),
+		reverseProxy:    fs.Bool("reverse-proxy", defaults.ReverseProxy, "bind panel to loopback and expose via nginx reverse proxy"),
+		panelDomain:     fs.String("panel-domain", "", "panel domain for nginx server_name (required with --reverse-proxy)"),
 		skipHealthcheck: fs.Bool("skip-healthcheck", false, "skip final /health check"),
 		dryRun:          fs.Bool("dry-run", false, "do not execute system commands"),
 	}
 	return fs, values
 }
 
-func (v *installFlagValues) toOptions(defaults installer.Options) (installer.Options, bool) {
+func (v *installFlagValues) toOptions(defaults installer.Options) (installer.Options, bool, error) {
 	opts := defaults
 	opts.Addr = strings.TrimSpace(*v.addr)
 	opts.Env = strings.TrimSpace(*v.env)
@@ -295,9 +304,12 @@ func (v *installFlagValues) toOptions(defaults installer.Options) (installer.Opt
 	opts.RuntimeLockPath = strings.TrimSpace(*v.runtimeLockPath)
 	opts.RuntimeManifestURL = strings.TrimSpace(*v.runtimeManifest)
 	opts.RuntimeInstallDir = strings.TrimSpace(*v.runtimeInstall)
+	if err := applyReverseProxySettings(&opts, *v.reverseProxy, strings.TrimSpace(*v.panelDomain)); err != nil {
+		return installer.Options{}, false, err
+	}
 	opts.VerifyUpstreamSources = true
 	opts.SkipHealthcheck = *v.skipHealthcheck
-	return opts, *v.dryRun
+	return opts, *v.dryRun, nil
 }
 
 func printInstallUsage(w io.Writer, fs *flag.FlagSet) {
@@ -347,6 +359,21 @@ func promptInstallOptions(defaults installer.Options, in io.Reader, out io.Write
 			return installer.Options{}, false, err
 		}
 		opts.RuntimeChannel = strings.ToLower(opts.RuntimeChannel)
+	}
+	enableReverseProxy, err := promptBool(reader, out, "Enable nginx reverse proxy for panel", false)
+	if err != nil {
+		return installer.Options{}, false, err
+	}
+	panelDomain := ""
+	if enableReverseProxy {
+		if panelDomain, err = promptString(reader, out, "Panel domain (e.g. panel.example.com)", "", nonEmptyValidator("panel domain")); err != nil {
+			return installer.Options{}, false, err
+		}
+	}
+	if err := applyReverseProxySettings(&opts, enableReverseProxy, panelDomain); err != nil {
+		return installer.Options{}, false, err
+	}
+	if !useDefaults {
 		if dryRun, err = promptBool(reader, out, "Dry run (do not execute commands)", false); err != nil {
 			return installer.Options{}, false, err
 		}
@@ -361,6 +388,39 @@ func promptInstallOptions(defaults installer.Options, in io.Reader, out io.Write
 
 	opts.VerifyUpstreamSources = true
 	return opts, dryRun, nil
+}
+
+func applyReverseProxySettings(opts *installer.Options, enabled bool, domain string) error {
+	if opts == nil {
+		return fmt.Errorf("installer options are required")
+	}
+	opts.ReverseProxy = enabled
+	if !enabled {
+		opts.PanelDomain = "_"
+		return nil
+	}
+	panelDomain := strings.TrimSpace(domain)
+	if panelDomain == "" {
+		return fmt.Errorf("panel domain is required when reverse proxy is enabled")
+	}
+	opts.PanelDomain = panelDomain
+	opts.Addr = net.JoinHostPort("127.0.0.1", parseListenPort(opts.Addr))
+	return nil
+}
+
+func parseListenPort(addr string) string {
+	a := strings.TrimSpace(addr)
+	if a == "" {
+		return "8080"
+	}
+	if strings.HasPrefix(a, ":") && len(a) > 1 {
+		return strings.TrimPrefix(a, ":")
+	}
+	_, port, err := net.SplitHostPort(a)
+	if err == nil && strings.TrimSpace(port) != "" {
+		return port
+	}
+	return "8080"
 }
 
 func nonEmptyValidator(field string) promptValidator {
