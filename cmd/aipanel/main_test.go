@@ -202,6 +202,8 @@ func TestPromptInstallOptions_CustomMode(t *testing.T) {
 		"edge",
 		"y",
 		"panel.example.com",
+		"y",
+		"tls-admin@example.com",
 		"n",
 		"y",
 	}, "\n") + "\n"
@@ -234,6 +236,12 @@ func TestPromptInstallOptions_CustomMode(t *testing.T) {
 	}
 	if opts.PanelDomain != "panel.example.com" {
 		t.Fatalf("panel domain mismatch: got %q", opts.PanelDomain)
+	}
+	if !opts.EnableLetsEncrypt {
+		t.Fatal("expected letsencrypt enabled")
+	}
+	if opts.LetsEncryptEmail != "tls-admin@example.com" {
+		t.Fatalf("letsencrypt email mismatch: got %q", opts.LetsEncryptEmail)
 	}
 }
 
@@ -291,6 +299,63 @@ func TestInstallFlagValuesToOptions_OnlyStep(t *testing.T) {
 	}
 	if opts.OnlyStep != "install_phpmyadmin" {
 		t.Fatalf("only step mismatch: got %q", opts.OnlyStep)
+	}
+}
+
+func TestInstallFlagValuesToOptions_LetsEncrypt(t *testing.T) {
+	defaults := installer.DefaultOptions()
+	fs, values := newInstallFlagSet(defaults)
+	args := []string{
+		"--reverse-proxy",
+		"--panel-domain", "panel.example.com",
+		"--lets-encrypt",
+		"--lets-encrypt-email", "ops@example.com",
+	}
+	if err := fs.Parse(args); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+	opts, _, err := values.toOptions(defaults)
+	if err != nil {
+		t.Fatalf("toOptions error: %v", err)
+	}
+	if !opts.EnableLetsEncrypt {
+		t.Fatal("expected letsencrypt enabled")
+	}
+	if opts.LetsEncryptEmail != "ops@example.com" {
+		t.Fatalf("letsencrypt email mismatch: got %q", opts.LetsEncryptEmail)
+	}
+}
+
+func TestInstallFlagValuesToOptions_LetsEncryptRequiresReverseProxy(t *testing.T) {
+	defaults := installer.DefaultOptions()
+	fs, values := newInstallFlagSet(defaults)
+	args := []string{
+		"--lets-encrypt",
+		"--lets-encrypt-email", "ops@example.com",
+	}
+	if err := fs.Parse(args); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+	_, _, err := values.toOptions(defaults)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "letsencrypt requires --reverse-proxy") {
+		t.Fatalf("expected letsencrypt reverse proxy validation error, got %v", err)
+	}
+}
+
+func TestInstallFlagValuesToOptions_LetsEncryptRequiresEmail(t *testing.T) {
+	defaults := installer.DefaultOptions()
+	fs, values := newInstallFlagSet(defaults)
+	args := []string{
+		"--reverse-proxy",
+		"--panel-domain", "panel.example.com",
+		"--lets-encrypt",
+	}
+	if err := fs.Parse(args); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+	_, _, err := values.toOptions(defaults)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "letsencrypt email is required") {
+		t.Fatalf("expected letsencrypt email validation error, got %v", err)
 	}
 }
 

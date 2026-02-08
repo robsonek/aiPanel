@@ -43,6 +43,7 @@ const (
 	defaultPHPMyAdminURL        = "https://files.phpmyadmin.net/phpMyAdmin/5.2.3/phpMyAdmin-5.2.3-all-languages.tar.gz"
 	defaultPHPMyAdminSHA256URL  = "https://files.phpmyadmin.net/phpMyAdmin/5.2.3/phpMyAdmin-5.2.3-all-languages.tar.gz.sha256"
 	defaultPHPMyAdminInstallDir = "/usr/share/phpmyadmin"
+	defaultLetsEncryptWebroot   = "/var/www/letsencrypt"
 )
 
 // Options controls installer behavior.
@@ -71,6 +72,9 @@ type Options struct {
 	PHPMyAdminSHA256URL   string
 	PHPMyAdminInstallDir  string
 	SkipPHPMyAdmin        bool
+	EnableLetsEncrypt     bool
+	LetsEncryptEmail      string
+	LetsEncryptWebroot    string
 	OnlyStep              string
 
 	OSReleasePath string
@@ -128,6 +132,9 @@ func DefaultOptions() Options {
 		PHPMyAdminURL:          defaultPHPMyAdminURL,
 		PHPMyAdminSHA256URL:    defaultPHPMyAdminSHA256URL,
 		PHPMyAdminInstallDir:   defaultPHPMyAdminInstallDir,
+		EnableLetsEncrypt:      false,
+		LetsEncryptEmail:       "",
+		LetsEncryptWebroot:     defaultLetsEncryptWebroot,
 		OSReleasePath:          "/etc/os-release",
 		MemInfoPath:            "/proc/meminfo",
 		Proc1ExePath:           "/proc/1/exe",
@@ -206,6 +213,9 @@ func (o Options) withDefaults() Options {
 	}
 	if strings.TrimSpace(o.PHPMyAdminInstallDir) == "" {
 		o.PHPMyAdminInstallDir = d.PHPMyAdminInstallDir
+	}
+	if strings.TrimSpace(o.LetsEncryptWebroot) == "" {
+		o.LetsEncryptWebroot = d.LetsEncryptWebroot
 	}
 	if strings.TrimSpace(o.OSReleasePath) == "" {
 		o.OSReleasePath = d.OSReleasePath
@@ -292,6 +302,18 @@ func (o Options) validate() error {
 	}
 	if o.ReverseProxy && strings.TrimSpace(o.PanelDomain) == "" {
 		return fmt.Errorf("panel domain is required when reverse proxy is enabled")
+	}
+	if o.EnableLetsEncrypt {
+		if !o.ReverseProxy {
+			return fmt.Errorf("letsencrypt requires reverse proxy mode")
+		}
+		panelDomain := strings.TrimSpace(o.PanelDomain)
+		if panelDomain == "" || panelDomain == "_" {
+			return fmt.Errorf("panel domain is required when letsencrypt is enabled")
+		}
+		if strings.TrimSpace(o.LetsEncryptEmail) == "" {
+			return fmt.Errorf("letsencrypt email is required when letsencrypt is enabled")
+		}
 	}
 	if strings.TrimSpace(o.OnlyStep) != "" && !isInstallerStepSupported(o.OnlyStep) {
 		return fmt.Errorf("invalid installer step for --only: %s", o.OnlyStep)
@@ -531,6 +553,7 @@ func (i *Installer) Run(ctx context.Context) (*Report, error) {
 		{name: steps.InstallNginx, fn: i.installNginx},
 		{name: steps.InitDatabases, fn: i.initDatabases},
 		{name: steps.ConfigureNginx, fn: i.configureNginx},
+		{name: steps.ConfigureTLS, fn: i.configureTLS},
 		{name: steps.ConfigurePHP, fn: i.configurePHPFPM},
 		{name: steps.InstallPHPMyAdmin, fn: i.installPHPMyAdmin},
 		{name: steps.WriteUnit, fn: i.writeUnitFile},
@@ -638,6 +661,9 @@ func (i *Installer) installPackages(ctx context.Context) error {
 		"pkg-config",
 		"sqlite3",
 		"zlib1g-dev",
+	}
+	if i.opts.EnableLetsEncrypt {
+		packages = append(packages, "certbot")
 	}
 	i.logf("[install_packages] apt prerequisites: %s", strings.Join(packages, ", "))
 	installArgs := append([]string{"install", "-y", "--no-install-recommends"}, packages...)
@@ -1746,6 +1772,16 @@ func (i *Installer) initDatabases(ctx context.Context) error {
 	return nil
 }
 
+type panelVhostTemplateData struct {
+	PanelPort   string
+	PanelHost   string
+	PHPVersion  string
+	ACMEWebroot string
+	EnableTLS   bool
+	TLSCertPath string
+	TLSKeyPath  string
+}
+
 func (i *Installer) configureNginx(ctx context.Context) error {
 	if err := i.ensureRuntimeNginxConfig(ctx); err != nil {
 		return err
@@ -1763,13 +1799,34 @@ func (i *Installer) configureNginx(ctx context.Context) error {
 	if strings.TrimSpace(phpVersion) == "" {
 		phpVersion = "8.3"
 	}
+	acmeWebroot := strings.TrimSpace(i.opts.LetsEncryptWebroot)
+	if acmeWebroot == "" {
+		acmeWebroot = defaultLetsEncryptWebroot
+	}
+	enableTLS := false
+	tlsCertPath := ""
+	tlsKeyPath := ""
+	if i.opts.EnableLetsEncrypt && i.opts.ReverseProxy && panelHost != "_" {
+		tlsCertPath, tlsKeyPath = letsEncryptCertificatePaths(panelHost)
+		certPath := pathInRootFS(i.opts.RootFSPath, tlsCertPath)
+		keyPath := pathInRootFS(i.opts.RootFSPath, tlsKeyPath)
+		if fileExists(certPath) && fileExists(keyPath) {
+			enableTLS = true
+		} else {
+			i.logf("[configure_nginx] letsencrypt is enabled but certificate files are missing, using HTTP-only vhost")
+		}
+	}
 	panelContent, err := renderTemplateWithFallback(
 		i.opts.PanelVhostTemplatePath,
 		defaultPanelVhostTemplate,
-		map[string]string{
-			"PanelPort":  panelPort,
-			"PanelHost":  panelHost,
-			"PHPVersion": phpVersion,
+		panelVhostTemplateData{
+			PanelPort:   panelPort,
+			PanelHost:   panelHost,
+			PHPVersion:  phpVersion,
+			ACMEWebroot: acmeWebroot,
+			EnableTLS:   enableTLS,
+			TLSCertPath: tlsCertPath,
+			TLSKeyPath:  tlsKeyPath,
 		},
 	)
 	if err != nil {
@@ -1832,6 +1889,98 @@ func (i *Installer) configureNginx(ctx context.Context) error {
 	}
 	if _, err := i.runner.Run(ctx, "systemctl", "reload", "nginx"); err != nil {
 		return fmt.Errorf("reload nginx: %w", err)
+	}
+	return nil
+}
+
+func (i *Installer) configureTLS(ctx context.Context) error {
+	if !i.opts.EnableLetsEncrypt {
+		i.logf("[configure_tls] skipped (letsencrypt disabled)")
+		return nil
+	}
+	if !i.opts.ReverseProxy {
+		return fmt.Errorf("letsencrypt requires reverse proxy mode")
+	}
+	panelDomain := strings.TrimSpace(i.opts.PanelDomain)
+	if panelDomain == "" || panelDomain == "_" {
+		return fmt.Errorf("panel domain is required when letsencrypt is enabled")
+	}
+	email := strings.TrimSpace(i.opts.LetsEncryptEmail)
+	if email == "" {
+		return fmt.Errorf("letsencrypt email is required when letsencrypt is enabled")
+	}
+	if err := i.ensureCertbotInstalled(ctx); err != nil {
+		return err
+	}
+
+	// Ensure Nginx serves ACME challenge from webroot before issuing certificate.
+	if err := i.configureNginx(ctx); err != nil {
+		return fmt.Errorf("prepare nginx for ACME challenge: %w", err)
+	}
+
+	webroot := strings.TrimSpace(i.opts.LetsEncryptWebroot)
+	if webroot == "" {
+		webroot = defaultLetsEncryptWebroot
+	}
+	challengeDir := filepath.Join(pathInRootFS(i.opts.RootFSPath, webroot), ".well-known", "acme-challenge")
+	if err := os.MkdirAll(challengeDir, 0o750); err != nil {
+		return fmt.Errorf("create letsencrypt challenge dir: %w", err)
+	}
+	if _, err := i.runner.Run(ctx, "id", "-u", "www-data"); err != nil {
+		i.logf("[configure_tls] skip webroot ownership update (www-data missing): %v", err)
+	} else {
+		if _, err := i.runner.Run(ctx, "chown", "-R", "root:www-data", webroot); err != nil {
+			return fmt.Errorf("set letsencrypt webroot owner: %w", err)
+		}
+		if _, err := i.runner.Run(ctx, "chmod", "-R", "g+rX,o-rwx", webroot); err != nil {
+			return fmt.Errorf("set letsencrypt webroot permissions: %w", err)
+		}
+	}
+
+	certbotArgs := []string{
+		"certonly",
+		"--webroot",
+		"--webroot-path", webroot,
+		"--domain", panelDomain,
+		"--email", email,
+		"--agree-tos",
+		"--non-interactive",
+		"--keep-until-expiring",
+	}
+	if _, err := i.runner.Run(ctx, "certbot", certbotArgs...); err != nil {
+		return fmt.Errorf("issue letsencrypt certificate: %w", err)
+	}
+
+	hookPath := pathInRootFS(
+		i.opts.RootFSPath,
+		"/etc/letsencrypt/renewal-hooks/deploy/aipanel-reload-nginx.sh",
+	)
+	hook := "#!/usr/bin/env sh\nset -eu\nsystemctl reload nginx\n"
+	if err := writeTextFile(hookPath, hook, 0o750); err != nil {
+		return fmt.Errorf("write letsencrypt renewal hook: %w", err)
+	}
+
+	// Re-render panel vhost; when cert files exist, template switches to HTTPS listener.
+	if err := i.configureNginx(ctx); err != nil {
+		return fmt.Errorf("apply nginx tls configuration: %w", err)
+	}
+	return nil
+}
+
+func (i *Installer) ensureCertbotInstalled(ctx context.Context) error {
+	if _, err := i.runner.Run(ctx, "certbot", "--version"); err == nil {
+		return nil
+	}
+
+	i.logf("[configure_tls] certbot is missing, installing via apt")
+	if _, err := i.runner.Run(ctx, "apt-get", "update"); err != nil {
+		return fmt.Errorf("apt update before certbot install: %w", err)
+	}
+	if _, err := i.runner.Run(ctx, "apt-get", "install", "-y", "--no-install-recommends", "certbot"); err != nil {
+		return fmt.Errorf("apt install certbot: %w", err)
+	}
+	if _, err := i.runner.Run(ctx, "certbot", "--version"); err != nil {
+		return fmt.Errorf("verify certbot install: %w", err)
 	}
 	return nil
 }
@@ -2292,6 +2441,16 @@ func parsePort(addr, fallback string) string {
 	return port
 }
 
+func letsEncryptCertificatePaths(domain string) (string, string) {
+	base := filepath.Join("/etc/letsencrypt/live", domain)
+	return filepath.Join(base, "fullchain.pem"), filepath.Join(base, "privkey.pem")
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 func renderTemplateWithFallback(path, fallback string, data any) (string, error) {
 	content, err := os.ReadFile(path) //nolint:gosec // Installer controls template path.
 	if err != nil {
@@ -2316,12 +2475,45 @@ func randomPassword() (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
-const defaultPanelVhostTemplate = `server {
+const defaultPanelVhostTemplate = `{{ if .EnableTLS -}}
+server {
     listen 80;
     server_name {{ .PanelHost }};
 
     access_log /var/log/nginx/aipanel.access.log;
     error_log /var/log/nginx/aipanel.error.log;
+
+    location /.well-known/acme-challenge/ {
+        root {{ .ACMEWebroot }};
+        try_files $uri =404;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name {{ .PanelHost }};
+
+    access_log /var/log/nginx/aipanel.access.log;
+    error_log /var/log/nginx/aipanel.error.log;
+    ssl_certificate {{ .TLSCertPath }};
+    ssl_certificate_key {{ .TLSKeyPath }};
+{{ else -}}
+server {
+    listen 80;
+    server_name {{ .PanelHost }};
+
+    access_log /var/log/nginx/aipanel.access.log;
+    error_log /var/log/nginx/aipanel.error.log;
+
+    location /.well-known/acme-challenge/ {
+        root {{ .ACMEWebroot }};
+        try_files $uri =404;
+    }
+{{ end -}}
 
     location = /phpmyadmin {
         return 301 /phpmyadmin/;

@@ -5,8 +5,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -80,7 +82,7 @@ func (r ExecRunner) RunLive(
 		mu.Unlock()
 	}
 	setReadErr := func(err error) {
-		if err == nil {
+		if err == nil || isIgnorablePipeReadErr(err) {
 			return
 		}
 		mu.Lock()
@@ -127,6 +129,17 @@ func (r ExecRunner) RunLive(
 		return out, fmt.Errorf("exec %s %s: %w (%s)", name, strings.Join(args, " "), waitErr, strings.TrimSpace(out))
 	}
 	return out, nil
+}
+
+func isIgnorablePipeReadErr(err error) bool {
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, os.ErrClosed) {
+		return true
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(msg, "file already closed") || strings.Contains(msg, "use of closed file")
 }
 
 // DaemonReload triggers systemd to reload unit files.

@@ -257,6 +257,8 @@ type installFlagValues struct {
 	runtimeInstall  *string
 	reverseProxy    *bool
 	panelDomain     *string
+	letsEncrypt     *bool
+	letsEncryptMail *string
 	onlyStep        *string
 	skipHealthcheck *bool
 	dryRun          *bool
@@ -283,6 +285,8 @@ func newInstallFlagSet(defaults installer.Options) (*flag.FlagSet, *installFlagV
 		runtimeInstall:  fs.String("runtime-install-dir", defaults.RuntimeInstallDir, "runtime install directory for source runtime modes"),
 		reverseProxy:    fs.Bool("reverse-proxy", defaults.ReverseProxy, "bind panel to loopback and expose via nginx reverse proxy"),
 		panelDomain:     fs.String("panel-domain", "", "panel domain for nginx server_name (required with --reverse-proxy)"),
+		letsEncrypt:     fs.Bool("lets-encrypt", defaults.EnableLetsEncrypt, "issue Let's Encrypt certificate for panel domain (requires --reverse-proxy)"),
+		letsEncryptMail: fs.String("lets-encrypt-email", defaults.LetsEncryptEmail, "email for Let's Encrypt registration (required with --lets-encrypt)"),
 		onlyStep:        fs.String("only", "", "run only one installer step (e.g. install_phpmyadmin)"),
 		skipHealthcheck: fs.Bool("skip-healthcheck", false, "skip final /health check"),
 		dryRun:          fs.Bool("dry-run", false, "do not execute system commands"),
@@ -311,6 +315,14 @@ func (v *installFlagValues) toOptions(defaults installer.Options) (installer.Opt
 	opts.OnlyStep = strings.ToLower(strings.TrimSpace(*v.onlyStep))
 	if err := applyReverseProxySettings(&opts, *v.reverseProxy, strings.TrimSpace(*v.panelDomain)); err != nil {
 		return installer.Options{}, false, err
+	}
+	opts.EnableLetsEncrypt = *v.letsEncrypt
+	opts.LetsEncryptEmail = strings.TrimSpace(*v.letsEncryptMail)
+	if opts.EnableLetsEncrypt && !opts.ReverseProxy {
+		return installer.Options{}, false, fmt.Errorf("letsencrypt requires --reverse-proxy")
+	}
+	if opts.EnableLetsEncrypt && opts.LetsEncryptEmail == "" {
+		return installer.Options{}, false, fmt.Errorf("letsencrypt email is required with --lets-encrypt")
 	}
 	if err := validateAdminPassword(opts.AdminPassword); err != nil {
 		return installer.Options{}, false, err
@@ -373,14 +385,26 @@ func promptInstallOptions(defaults installer.Options, in io.Reader, out io.Write
 		return installer.Options{}, false, err
 	}
 	panelDomain := ""
+	enableLetsEncrypt := false
+	letsEncryptEmail := ""
 	if enableReverseProxy {
 		if panelDomain, err = promptString(reader, out, "Panel domain (e.g. panel.example.com)", "", nonEmptyValidator("panel domain")); err != nil {
 			return installer.Options{}, false, err
+		}
+		if enableLetsEncrypt, err = promptBool(reader, out, "Enable Let's Encrypt certificate for panel domain", true); err != nil {
+			return installer.Options{}, false, err
+		}
+		if enableLetsEncrypt {
+			if letsEncryptEmail, err = promptString(reader, out, "Let's Encrypt email", opts.AdminEmail, nonEmptyValidator("letsencrypt email")); err != nil {
+				return installer.Options{}, false, err
+			}
 		}
 	}
 	if err := applyReverseProxySettings(&opts, enableReverseProxy, panelDomain); err != nil {
 		return installer.Options{}, false, err
 	}
+	opts.EnableLetsEncrypt = enableLetsEncrypt
+	opts.LetsEncryptEmail = letsEncryptEmail
 	if !useDefaults {
 		if dryRun, err = promptBool(reader, out, "Dry run (do not execute commands)", false); err != nil {
 			return installer.Options{}, false, err

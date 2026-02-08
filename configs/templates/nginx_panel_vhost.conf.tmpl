@@ -1,9 +1,42 @@
+{{ if .EnableTLS -}}
 server {
     listen 80;
     server_name {{ .PanelHost }};
 
     access_log /var/log/nginx/aipanel.access.log;
     error_log /var/log/nginx/aipanel.error.log;
+
+    location /.well-known/acme-challenge/ {
+        root {{ .ACMEWebroot }};
+        try_files $uri =404;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name {{ .PanelHost }};
+
+    access_log /var/log/nginx/aipanel.access.log;
+    error_log /var/log/nginx/aipanel.error.log;
+    ssl_certificate {{ .TLSCertPath }};
+    ssl_certificate_key {{ .TLSKeyPath }};
+{{ else -}}
+server {
+    listen 80;
+    server_name {{ .PanelHost }};
+
+    access_log /var/log/nginx/aipanel.access.log;
+    error_log /var/log/nginx/aipanel.error.log;
+
+    location /.well-known/acme-challenge/ {
+        root {{ .ACMEWebroot }};
+        try_files $uri =404;
+    }
+{{ end -}}
 
     location = /phpmyadmin {
         return 301 /phpmyadmin/;

@@ -38,6 +38,21 @@ func (r *fakeRunnerWithErrors) Run(_ context.Context, name string, args ...strin
 	return "", nil
 }
 
+type fakeRunnerFailOnce struct {
+	commands []string
+	failOnce map[string]bool
+}
+
+func (r *fakeRunnerFailOnce) Run(_ context.Context, name string, args ...string) (string, error) {
+	cmd := strings.TrimSpace(name + " " + strings.Join(args, " "))
+	r.commands = append(r.commands, cmd)
+	if r.failOnce[cmd] {
+		delete(r.failOnce, cmd)
+		return "", fmt.Errorf("command failed: %s", cmd)
+	}
+	return "", nil
+}
+
 type fakeRunnerShellBuild struct {
 	commands []string
 }
@@ -283,6 +298,91 @@ func TestEnsureRuntimeNginxConfig_SetsTempDirPermissions(t *testing.T) {
 	expectedProxyDir := filepath.Join(root, "var", "lib", "nginx", "proxy")
 	if !strings.Contains(joined, "chown -R www-data:www-data") || !strings.Contains(joined, expectedProxyDir) {
 		t.Fatalf("expected chown command for nginx temp dirs, got:\n%s", joined)
+	}
+}
+
+func TestInstallPackages_IncludesCertbotWhenLetsEncryptEnabled(t *testing.T) {
+	runner := &fakeRunner{}
+	opts := DefaultOptions()
+	opts.EnableLetsEncrypt = true
+
+	ins := &Installer{
+		opts:   opts,
+		runner: runner,
+		now:    time.Now,
+	}
+	if err := ins.installPackages(context.Background()); err != nil {
+		t.Fatalf("installPackages failed: %v", err)
+	}
+
+	joined := strings.Join(runner.commands, "\n")
+	if !strings.Contains(joined, "apt-get install -y --no-install-recommends") {
+		t.Fatalf("expected apt-get install command, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "certbot") {
+		t.Fatalf("expected certbot package in apt install command, got:\n%s", joined)
+	}
+}
+
+func TestConfigureTLS_IssuesCertificateAndWritesRenewHook(t *testing.T) {
+	root := t.TempDir()
+	runner := &fakeRunner{}
+	opts := DefaultOptions()
+	opts.RootFSPath = root
+	opts.ReverseProxy = true
+	opts.PanelDomain = "panel.example.com"
+	opts.EnableLetsEncrypt = true
+	opts.LetsEncryptEmail = "ops@example.com"
+	opts.RuntimeInstallDir = filepath.Join(root, "opt", "aipanel", "runtime")
+	opts.NginxSitesAvailableDir = filepath.Join(root, "etc", "nginx", "sites-available")
+	opts.NginxSitesEnabledDir = filepath.Join(root, "etc", "nginx", "sites-enabled")
+	opts.PHPBaseDir = filepath.Join(root, "etc", "php")
+	opts.PanelVhostTemplatePath = filepath.Join(root, "configs", "templates", "nginx_panel_vhost.conf.tmpl")
+	opts.CatchAllTemplatePath = filepath.Join(root, "configs", "templates", "nginx_catchall.conf.tmpl")
+
+	ins := &Installer{
+		opts:   opts,
+		runner: runner,
+		now:    time.Now,
+	}
+	if err := ins.configureTLS(context.Background()); err != nil {
+		t.Fatalf("configureTLS failed: %v", err)
+	}
+
+	joined := strings.Join(runner.commands, "\n")
+	if !strings.Contains(joined, "certbot certonly --webroot --webroot-path /var/www/letsencrypt --domain panel.example.com --email ops@example.com --agree-tos --non-interactive --keep-until-expiring") {
+		t.Fatalf("expected certbot command, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "nginx -t") {
+		t.Fatalf("expected nginx config test command, got:\n%s", joined)
+	}
+	hookPath := filepath.Join(root, "etc", "letsencrypt", "renewal-hooks", "deploy", "aipanel-reload-nginx.sh")
+	if _, err := os.Stat(hookPath); err != nil {
+		t.Fatalf("expected letsencrypt hook file, got %v", err)
+	}
+}
+
+func TestEnsureCertbotInstalled_InstallsWhenMissing(t *testing.T) {
+	runner := &fakeRunnerFailOnce{
+		failOnce: map[string]bool{
+			"certbot --version": true,
+		},
+	}
+	ins := &Installer{
+		opts:   DefaultOptions(),
+		runner: runner,
+		now:    time.Now,
+	}
+	if err := ins.ensureCertbotInstalled(context.Background()); err != nil {
+		t.Fatalf("ensureCertbotInstalled failed: %v", err)
+	}
+
+	joined := strings.Join(runner.commands, "\n")
+	if !strings.Contains(joined, "apt-get update") {
+		t.Fatalf("expected apt-get update when certbot missing, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "apt-get install -y --no-install-recommends certbot") {
+		t.Fatalf("expected certbot install command, got:\n%s", joined)
 	}
 }
 

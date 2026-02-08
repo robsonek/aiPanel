@@ -54,6 +54,28 @@ func TestOptionsValidate(t *testing.T) {
 		}
 	})
 
+	t.Run("letsencrypt requires reverse proxy", func(t *testing.T) {
+		opts := DefaultOptions()
+		opts.EnableLetsEncrypt = true
+		opts.LetsEncryptEmail = "ops@example.com"
+		err := opts.validate()
+		if err == nil || !strings.Contains(strings.ToLower(err.Error()), "letsencrypt requires reverse proxy") {
+			t.Fatalf("expected letsencrypt reverse proxy validation error, got %v", err)
+		}
+	})
+
+	t.Run("letsencrypt requires email", func(t *testing.T) {
+		opts := DefaultOptions()
+		opts.ReverseProxy = true
+		opts.PanelDomain = "panel.example.com"
+		opts.EnableLetsEncrypt = true
+		opts.LetsEncryptEmail = ""
+		err := opts.validate()
+		if err == nil || !strings.Contains(strings.ToLower(err.Error()), "letsencrypt email is required") {
+			t.Fatalf("expected letsencrypt email validation error, got %v", err)
+		}
+	})
+
 	t.Run("admin password must meet minimum length", func(t *testing.T) {
 		opts := DefaultOptions()
 		opts.AdminPassword = "short"
@@ -114,6 +136,9 @@ func TestOptionsWithDefaults(t *testing.T) {
 	}
 	if opts.PHPMyAdminURL == "" || opts.PHPMyAdminSHA256URL == "" || opts.PHPMyAdminInstallDir == "" {
 		t.Fatal("expected phpMyAdmin defaults to be set")
+	}
+	if opts.LetsEncryptWebroot == "" {
+		t.Fatal("expected letsencrypt webroot default to be set")
 	}
 	if opts.OnlyStep != "" {
 		t.Fatalf("expected default only step empty, got %q", opts.OnlyStep)

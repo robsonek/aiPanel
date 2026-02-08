@@ -15,6 +15,7 @@ const (
 	InstallNginx      = "install_nginx"
 	InitDatabases     = "init_databases"
 	ConfigureNginx    = "configure_nginx"
+	ConfigureTLS      = "configure_tls"
 	ConfigurePHP      = "configure_phpfpm"
 	InstallPHPMyAdmin = "install_phpmyadmin"
 	WriteUnit         = "write_systemd_unit"
@@ -38,6 +39,7 @@ var Ordered = []string{
 	InstallNginx,
 	InitDatabases,
 	ConfigureNginx,
+	ConfigureTLS,
 	ConfigurePHP,
 	InstallPHPMyAdmin,
 	WriteUnit,
