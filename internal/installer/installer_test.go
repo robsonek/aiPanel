@@ -227,7 +227,7 @@ func TestInstallerRun_Phase1DrySystem(t *testing.T) {
 	if !strings.Contains(joined, "apt-get update") {
 		t.Fatalf("expected apt-get update command, got:\n%s", joined)
 	}
-	if !strings.Contains(joined, "apt-get install -y --no-install-recommends build-essential") {
+	if !strings.Contains(joined, "apt-get install -y --no-install-recommends") || !strings.Contains(joined, "build-essential") {
 		t.Fatalf("expected apt-get install command, got:\n%s", joined)
 	}
 	if !strings.Contains(joined, "systemctl enable --now aipanel") {
@@ -557,7 +557,7 @@ func TestInstallerRun_SourceBuildCompilesRuntime(t *testing.T) {
 	}
 
 	joined := strings.Join(runner.commands, "\n")
-	if !strings.Contains(joined, "apt-get install -y --no-install-recommends build-essential") {
+	if !strings.Contains(joined, "apt-get install -y --no-install-recommends") || !strings.Contains(joined, "build-essential") {
 		t.Fatalf("expected apt-get install command, got:\n%s", joined)
 	}
 	if !strings.Contains(joined, "cp ./bin/nginx") {

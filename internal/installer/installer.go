@@ -714,9 +714,11 @@ func (i *Installer) addRepositories(ctx context.Context) error {
 
 func (i *Installer) installPackages(ctx context.Context) error {
 	packages := []string{
+		"bison",
 		"build-essential",
 		"ca-certificates",
 		"cmake",
+		"flex",
 		"gnupg",
 		"libicu-dev",
 		"libonig-dev",
