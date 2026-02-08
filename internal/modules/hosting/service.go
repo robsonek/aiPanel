@@ -25,6 +25,7 @@ var (
 
 const defaultPHPVersion = "8.5"
 const nginxContentReaderGroup = "www-data"
+const rootWebOwner = "root"
 
 // Service orchestrates site CRUD against adapters and panel.db.
 type Service struct {
@@ -104,11 +105,14 @@ func (s *Service) CreateSite(ctx context.Context, req CreateSiteRequest) (Site, 
 		SystemUser: systemUser,
 	}
 
-	if err = os.MkdirAll(s.webRoot, 0o755); err != nil {
+	if err = os.MkdirAll(s.webRoot, 0o750); err != nil {
 		return Site{}, fmt.Errorf("prepare web root: %w", err)
 	}
-	if err = os.Chmod(s.webRoot, 0o755); err != nil {
-		return Site{}, fmt.Errorf("set web root permissions: %w", err)
+	if _, runErr := s.runner.Run(ctx, "chown", rootWebOwner+":"+nginxContentReaderGroup, s.webRoot); runErr != nil {
+		return Site{}, fmt.Errorf("set web root owner/group: %w", runErr)
+	}
+	if _, runErr := s.runner.Run(ctx, "chmod", "0750", s.webRoot); runErr != nil {
+		return Site{}, fmt.Errorf("set web root permissions: %w", runErr)
 	}
 
 	var createdUser bool
@@ -141,7 +145,8 @@ func (s *Service) CreateSite(ctx context.Context, req CreateSiteRequest) (Site, 
 	if err = os.MkdirAll(rootDir, 0o750); err != nil {
 		return Site{}, fmt.Errorf("create docroot: %w", err)
 	}
-	if err = ensureSiteBootstrapFiles(rootDir, domain); err != nil {
+	bootstrapIndexPath, err := ensureSiteBootstrapFiles(rootDir, domain)
+	if err != nil {
 		return Site{}, fmt.Errorf("bootstrap docroot: %w", err)
 	}
 
@@ -160,6 +165,11 @@ func (s *Service) CreateSite(ctx context.Context, req CreateSiteRequest) (Site, 
 	}
 	if _, runErr := s.runner.Run(ctx, "chown", "-R", systemUser+":"+nginxContentReaderGroup, rootBaseDir); runErr != nil {
 		return Site{}, fmt.Errorf("chown site directory: %w", runErr)
+	}
+	if bootstrapIndexPath != "" {
+		if _, runErr := s.runner.Run(ctx, "chmod", "0644", bootstrapIndexPath); runErr != nil {
+			return Site{}, fmt.Errorf("set bootstrap index permissions: %w", runErr)
+		}
 	}
 
 	if err = s.phpfpm.WritePool(ctx, siteCfg); err != nil {
@@ -353,20 +363,24 @@ func systemUserForDomain(domain string) string {
 	return "site_" + token
 }
 
-func ensureSiteBootstrapFiles(rootDir, domain string) error {
+func ensureSiteBootstrapFiles(rootDir, domain string) (string, error) {
 	for _, name := range []string{"index.php", "index.html", "index.htm"} {
 		if _, err := os.Stat(filepath.Join(rootDir, name)); err == nil {
-			return nil
+			return "", nil
 		} else if err != nil && !os.IsNotExist(err) {
-			return err
+			return "", err
 		}
 	}
+	indexPath := filepath.Join(rootDir, "index.html")
 	body := "<!doctype html>\n" +
 		"<html lang=\"en\">\n" +
 		"<head><meta charset=\"utf-8\"><title>" + domain + "</title></head>\n" +
 		"<body><h1>" + domain + "</h1><p>Site created by aiPanel.</p></body>\n" +
 		"</html>\n"
-	return os.WriteFile(filepath.Join(rootDir, "index.html"), []byte(body), 0o644)
+	if err := os.WriteFile(indexPath, []byte(body), 0o600); err != nil {
+		return "", err
+	}
+	return indexPath, nil
 }
 
 func withinBase(path, base string) bool {

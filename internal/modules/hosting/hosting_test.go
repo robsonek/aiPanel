@@ -116,6 +116,7 @@ func TestService_CreateSite(t *testing.T) {
 		t.Fatalf("expected chown command with nginx-readable group, got %v", runner.commands)
 	}
 	indexPath := filepath.Join(svc.webRoot, "test.example.com", "public_html", "index.html")
+	//nolint:gosec // Test reads a file created under TempDir controlled by this test.
 	content, readErr := os.ReadFile(indexPath)
 	if readErr != nil {
 		t.Fatalf("read index bootstrap file: %v", readErr)
