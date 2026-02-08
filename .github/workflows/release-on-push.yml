@@ -78,7 +78,10 @@ jobs:
 
           CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -ldflags="-s -w" -o "${output_binary}" ./cmd/aipanel
           tar -C dist -czf "${archive_path}" "${binary_name}"
-          sha256sum "${archive_path}" > "${archive_path}.sha256"
+          (
+            cd dist
+            sha256sum "${archive_name}" > "${archive_name}.sha256"
+          )
 
       - name: Upload release assets
         uses: actions/upload-artifact@v4

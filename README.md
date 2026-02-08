@@ -42,7 +42,8 @@ BASE_URL="https://github.com/${REPO}/releases/download/${TAG}"
 
 curl -fsSL "${BASE_URL}/${ASSET}" -o "/tmp/${ASSET}"
 curl -fsSL "${BASE_URL}/${ASSET}.sha256" -o "/tmp/${ASSET}.sha256"
-(cd /tmp && sha256sum -c "${ASSET}.sha256")
+EXPECTED_SHA256="$(awk '{print $1}' "/tmp/${ASSET}.sha256")"
+echo "${EXPECTED_SHA256}  /tmp/${ASSET}" | sha256sum -c -
 
 tar -xzf "/tmp/${ASSET}" -C /tmp
 sudo install -d -m 755 /etc/aipanel
