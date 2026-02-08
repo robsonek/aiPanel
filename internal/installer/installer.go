@@ -1013,11 +1013,13 @@ func (i *Installer) verifyRuntimeSourceSignature(
 
 	commands := []string{
 		"export GNUPGHOME=" + shellQuote(gnupgHome),
+		"gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys " + shellQuote(fingerprint) + " || true",
+		"if ! gpg --batch --list-keys --with-colons 2>/dev/null | grep -iq " + shellQuote(fingerprint) + "; then " +
+			"gpg --batch --keyserver hkps://keyserver.ubuntu.com --recv-keys " + shellQuote(fingerprint) + " || true; fi",
+		"if ! gpg --batch --list-keys --with-colons 2>/dev/null | grep -iq " + shellQuote(fingerprint) + "; then " +
+			"echo 'gpg key import failed for fingerprint' " + shellQuote(fingerprint) + " >&2; exit 1; fi",
+		"gpg --batch --verify " + shellQuote(signaturePath) + " " + shellQuote(archivePath),
 	}
-
-	keyserverImport := "gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys " + shellQuote(fingerprint)
-	commands = append(commands, keyserverImport)
-	commands = append(commands, "gpg --batch --verify "+shellQuote(signaturePath)+" "+shellQuote(archivePath))
 
 	verifyCmd := strings.Join(commands, " && ")
 	if _, err := i.runner.Run(ctx, "bash", "-lc", verifyCmd); err != nil {

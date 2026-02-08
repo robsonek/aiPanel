@@ -423,6 +423,43 @@ func TestCommandLoggingRunner_UsesLiveStreaming(t *testing.T) {
 	}
 }
 
+func TestVerifyRuntimeSourceSignature_UsesKeyserverFallback(t *testing.T) {
+	root := t.TempDir()
+	archivePath := filepath.Join(root, "runtime.tar.gz")
+	signaturePath := filepath.Join(root, "runtime.tar.gz.asc")
+	if err := os.WriteFile(archivePath, []byte("runtime"), 0o600); err != nil {
+		t.Fatalf("write archive fixture: %v", err)
+	}
+	if err := os.WriteFile(signaturePath, []byte("signature"), 0o600); err != nil {
+		t.Fatalf("write signature fixture: %v", err)
+	}
+
+	runner := &fakeRunner{}
+	ins := &Installer{
+		opts:   DefaultOptions(),
+		runner: runner,
+		now:    time.Now,
+	}
+	component := RuntimeComponentLock{
+		SignatureURL:         "file://" + signaturePath,
+		PublicKeyFingerprint: "177F4010FE56CA3336300305F1656F24C74CD1D8",
+	}
+	if err := ins.verifyRuntimeSourceSignature(context.Background(), "mariadb", component, archivePath); err != nil {
+		t.Fatalf("verifyRuntimeSourceSignature failed: %v", err)
+	}
+
+	joined := strings.Join(runner.commands, "\n")
+	if !strings.Contains(joined, "keys.openpgp.org --recv-keys") {
+		t.Fatalf("expected keys.openpgp.org import command, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "keyserver.ubuntu.com --recv-keys") {
+		t.Fatalf("expected keyserver.ubuntu.com fallback import command, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "gpg --batch --verify") {
+		t.Fatalf("expected gpg verify command, got:\n%s", joined)
+	}
+}
+
 func TestInstallerRun_SourceBuildCompilesRuntime(t *testing.T) {
 	root := t.TempDir()
 	srcBinary := filepath.Join(root, "src", "aipanel")
