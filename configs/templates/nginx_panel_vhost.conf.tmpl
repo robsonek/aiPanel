@@ -9,7 +9,7 @@ server {
         return 301 /phpmyadmin/;
     }
 
-    location ^~ /phpmyadmin/ {
+    location /phpmyadmin/ {
         root /usr/share;
         index index.php;
         try_files $uri $uri/ /phpmyadmin/index.php?$args;

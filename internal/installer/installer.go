@@ -325,6 +325,11 @@ func requiresRuntimeLockForStep(step string) bool {
 	}
 }
 
+func requiresRootPrivileges(rootFSPath string) bool {
+	root := strings.TrimSpace(rootFSPath)
+	return root == "" || root == string(os.PathSeparator)
+}
+
 // StepResult captures one installation step outcome.
 type StepResult struct {
 	Name       string `json:"name"`
@@ -385,6 +390,7 @@ type Installer struct {
 	opts        Options
 	runner      systemd.Runner
 	now         func() time.Time
+	geteuid     func() int
 	runtimeLock *RuntimeSourceLock
 }
 
@@ -397,6 +403,9 @@ func New(opts Options, runner systemd.Runner) *Installer {
 	ins := &Installer{
 		opts: opts,
 		now:  time.Now,
+		geteuid: func() int {
+			return os.Geteuid()
+		},
 	}
 	ins.runner = commandLoggingRunner{
 		delegate: runner,
@@ -405,9 +414,26 @@ func New(opts Options, runner systemd.Runner) *Installer {
 	return ins
 }
 
+func (i *Installer) ensureRootPrivileges() error {
+	if !requiresRootPrivileges(i.opts.RootFSPath) {
+		return nil
+	}
+	if i.geteuid() == 0 {
+		return nil
+	}
+	command := "sudo aipanel install"
+	if only := strings.TrimSpace(i.opts.OnlyStep); only != "" {
+		command += " --only " + only
+	}
+	return fmt.Errorf("installer requires root privileges; rerun with: %s", command)
+}
+
 // Run executes installer phase 1 with checkpoint-based idempotency.
 func (i *Installer) Run(ctx context.Context) (*Report, error) {
 	if err := i.opts.validate(); err != nil {
+		return nil, err
+	}
+	if err := i.ensureRootPrivileges(); err != nil {
 		return nil, err
 	}
 	if isRuntimeSourceMode(i.opts.InstallMode) && requiresRuntimeLockForStep(i.opts.OnlyStep) {
@@ -1709,6 +1735,7 @@ func (i *Installer) configureNginx(ctx context.Context) error {
 	if panelHost == "" {
 		panelHost = "_"
 	}
+	enableCatchAll := i.opts.ReverseProxy && panelHost != "_"
 	phpVersion, err := i.runtimePHPMajorMinorVersion(ctx)
 	if err != nil {
 		i.logf("[configure_nginx] resolve php-fpm version for phpMyAdmin failed: %v", err)
@@ -1772,8 +1799,12 @@ func (i *Installer) configureNginx(ctx context.Context) error {
 	if err := os.Symlink(panelPath, panelLink); err != nil {
 		return fmt.Errorf("create panel symlink: %w", err)
 	}
-	if err := os.Symlink(catchallPath, catchallLink); err != nil {
-		return fmt.Errorf("create catchall symlink: %w", err)
+	if enableCatchAll {
+		if err := os.Symlink(catchallPath, catchallLink); err != nil {
+			return fmt.Errorf("create catchall symlink: %w", err)
+		}
+	} else {
+		i.logf("[configure_nginx] skip catch-all vhost (reverse proxy disabled or panel host unset)")
 	}
 
 	if _, err := i.runner.Run(ctx, "nginx", "-t"); err != nil {
@@ -2276,7 +2307,7 @@ const defaultPanelVhostTemplate = `server {
         return 301 /phpmyadmin/;
     }
 
-    location ^~ /phpmyadmin/ {
+    location /phpmyadmin/ {
         root /usr/share;
         index index.php;
         try_files $uri $uri/ /phpmyadmin/index.php?$args;

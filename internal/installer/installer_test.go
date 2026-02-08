@@ -474,6 +474,22 @@ func TestInstallerRun_OnlyInstallPHPMyAdmin(t *testing.T) {
 	}
 }
 
+func TestInstallerRun_OnlyInstallPHPMyAdminRequiresRoot(t *testing.T) {
+	opts := DefaultOptions()
+	opts.OnlyStep = steps.InstallPHPMyAdmin
+
+	ins := New(opts, &fakeRunner{})
+	ins.geteuid = func() int { return 1000 }
+
+	_, err := ins.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected root privileges error")
+	}
+	if !strings.Contains(err.Error(), "sudo aipanel install --only install_phpmyadmin") {
+		t.Fatalf("expected sudo hint in error, got %v", err)
+	}
+}
+
 func writeTarGzArtifact(path string, name string, content []byte) error {
 	f, err := os.Create(path) //nolint:gosec // Test helper writes fixture file under t.TempDir.
 	if err != nil {
