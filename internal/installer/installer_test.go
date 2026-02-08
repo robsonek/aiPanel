@@ -265,11 +265,11 @@ func TestCreateServiceUser_NewUser(t *testing.T) {
 	opts := DefaultOptions()
 	opts.RootFSPath = root
 	dataDir := pathInRootFS(root, opts.DataDir)
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		t.Fatalf("mkdir data dir: %v", err)
 	}
 	panelDB := filepath.Join(dataDir, "panel.db")
-	if err := os.WriteFile(panelDB, []byte("db"), 0o644); err != nil {
+	if err := os.WriteFile(panelDB, []byte("db"), 0o600); err != nil {
 		t.Fatalf("write panel db: %v", err)
 	}
 
@@ -299,11 +299,11 @@ func TestCreateServiceUser_DoesNotChownRuntimeData(t *testing.T) {
 	opts.RootFSPath = root
 	dataDir := pathInRootFS(root, opts.DataDir)
 	runtimeDir := filepath.Join(dataDir, "runtime", "postgresql")
-	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
+	if err := os.MkdirAll(runtimeDir, 0o750); err != nil {
 		t.Fatalf("mkdir runtime dir: %v", err)
 	}
 	userFile := filepath.Join(dataDir, "audit.db")
-	if err := os.WriteFile(userFile, []byte("audit"), 0o644); err != nil {
+	if err := os.WriteFile(userFile, []byte("audit"), 0o600); err != nil {
 		t.Fatalf("write audit db: %v", err)
 	}
 
@@ -356,9 +356,6 @@ func TestEnsureRuntimePostgreSQLBootstrap_FixesDataParentPermissions(t *testing.
 	dataRoot := filepath.Join(root, "var", "lib", "aipanel")
 	if err := os.MkdirAll(dataRoot, 0o750); err != nil {
 		t.Fatalf("create data root: %v", err)
-	}
-	if err := os.Chmod(dataRoot, 0o750); err != nil {
-		t.Fatalf("chmod data root: %v", err)
 	}
 
 	runner := &fakeRunner{}
@@ -445,7 +442,7 @@ func TestRuntimeComponentNeedsUpdate_MetadataMissingRequiresRefresh(t *testing.T
 		SourceSHA256: strings.Repeat("a", 64),
 	}
 	versionDir := filepath.Join(opts.RuntimeInstallDir, "nginx", component.Version)
-	if err := os.MkdirAll(versionDir, 0o755); err != nil {
+	if err := os.MkdirAll(versionDir, 0o750); err != nil {
 		t.Fatalf("mkdir version dir: %v", err)
 	}
 	currentLink := filepath.Join(opts.RuntimeInstallDir, "nginx", "current")
@@ -477,7 +474,7 @@ func TestRuntimeComponentNeedsUpdate_MetadataMatchSkipsRefresh(t *testing.T) {
 		SourceSHA256: strings.Repeat("a", 64),
 	}
 	versionDir := filepath.Join(opts.RuntimeInstallDir, "nginx", component.Version)
-	if err := os.MkdirAll(versionDir, 0o755); err != nil {
+	if err := os.MkdirAll(versionDir, 0o750); err != nil {
 		t.Fatalf("mkdir version dir: %v", err)
 	}
 	if err := writeRuntimeComponentInstallState(versionDir, "nginx", component); err != nil {
@@ -536,7 +533,7 @@ func TestInstallerRun_UpdateChangedOnly_SkipsWhenRuntimeIsCurrent(t *testing.T) 
 		SourceSHA256: strings.Repeat("a", 64),
 	}
 	versionDir := filepath.Join(opts.RuntimeInstallDir, "nginx", component.Version)
-	if err := os.MkdirAll(versionDir, 0o755); err != nil {
+	if err := os.MkdirAll(versionDir, 0o750); err != nil {
 		t.Fatalf("mkdir version dir: %v", err)
 	}
 	if err := writeRuntimeComponentInstallState(versionDir, "nginx", component); err != nil {
