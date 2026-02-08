@@ -7,6 +7,95 @@
 
 aiPanel is an open-source hosting panel for Debian 13, designed with a security-first and performance-first approach.
 
+## Install on Fresh Debian 13 (Copy/Paste)
+
+Run all commands below on a clean Debian 13 server.
+
+### 1. Download latest aiPanel binary from GitHub Releases
+
+```bash
+set -euo pipefail
+
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl jq tar
+
+REPO="robsonek/aiPanel"
+ARCH="$(dpkg --print-architecture)"
+
+case "${ARCH}" in
+  amd64) ASSET_ARCH="amd64" ;;
+  arm64) ASSET_ARCH="arm64" ;;
+  *)
+    echo "Unsupported architecture: ${ARCH}. Supported: amd64, arm64"
+    exit 1
+    ;;
+esac
+
+TAG="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases" | jq -r '[.[] | select(.prerelease == true)][0].tag_name')"
+if [ -z "${TAG}" ] || [ "${TAG}" = "null" ]; then
+  echo "No prerelease found in ${REPO}"
+  exit 1
+fi
+
+ASSET="aipanel-linux-${ASSET_ARCH}.tar.gz"
+BASE_URL="https://github.com/${REPO}/releases/download/${TAG}"
+
+curl -fsSL "${BASE_URL}/${ASSET}" -o "/tmp/${ASSET}"
+curl -fsSL "${BASE_URL}/${ASSET}.sha256" -o "/tmp/${ASSET}.sha256"
+(cd /tmp && sha256sum -c "${ASSET}.sha256")
+
+tar -xzf "/tmp/${ASSET}" -C /tmp
+sudo install -d -m 755 /etc/aipanel
+sudo install -m 755 /tmp/aipanel /usr/local/bin/aipanel
+sudo curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/configs/sources/lock.json" -o /etc/aipanel/sources.lock.json
+sudo chmod 644 /etc/aipanel/sources.lock.json
+
+/usr/local/bin/aipanel --help >/dev/null
+echo "aiPanel binary installed successfully"
+```
+
+### 2. Run installer (interactive, recommended)
+
+```bash
+sudo aipanel install
+```
+
+### 3. Run installer (non-interactive example with reverse proxy)
+
+```bash
+set -euo pipefail
+
+PANEL_DOMAIN="panel.example.com"
+ADMIN_EMAIL="admin@example.com"
+ADMIN_PASSWORD='ChangeMe12345!'
+
+sudo aipanel install \
+  --admin-email "${ADMIN_EMAIL}" \
+  --admin-password "${ADMIN_PASSWORD}" \
+  --reverse-proxy \
+  --panel-domain "${PANEL_DOMAIN}"
+```
+
+### 4. Verify installation
+
+```bash
+sudo systemctl is-active aipanel aipanel-runtime-nginx.service aipanel-runtime-php-fpm.service aipanel-runtime-mariadb.service
+curl -fsS http://127.0.0.1:8080/health
+sudo tail -n 100 /var/log/aipanel/install.log
+sudo cat /var/lib/aipanel/install-report.json
+```
+
+Login URL:
+
+- reverse proxy enabled: `http://<your-panel-domain>`
+- reverse proxy disabled: `http://<your-server-ip>:8080`
+
+Installer artifacts:
+
+- log: `/var/log/aipanel/install.log`
+- report: `/var/lib/aipanel/install-report.json`
+- runtime lock: `/etc/aipanel/sources.lock.json`
+
 ## Current Status
 
 This repository is currently in the planning and architecture phase.
