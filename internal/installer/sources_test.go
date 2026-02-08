@@ -132,3 +132,54 @@ func TestLoadRuntimeSourceLock_InvalidBuildCommands(t *testing.T) {
 		t.Fatalf("expected build.commands validation error, got: %v", err)
 	}
 }
+
+func TestLoadRuntimeSourceLock_AllowsMissingSignatureWhenFingerprintMissingToo(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "lock-no-signature.json")
+	if err := os.WriteFile(path, []byte(`{
+  "schema_version": 1,
+  "channels": {
+    "stable": {
+      "postgresql": {
+        "version": "18.1",
+        "source_url": "https://ftp.postgresql.org/pub/source/v18.1/postgresql-18.1.tar.gz",
+        "source_sha256": "b0f18c2d6973d2aa023cfc77feda787d7bbe9c31a3977d0f04ac29885fb98ec4"
+      }
+    }
+  }
+}`), 0o600); err != nil {
+		t.Fatalf("write lock file: %v", err)
+	}
+
+	if _, err := LoadRuntimeSourceLock(path); err != nil {
+		t.Fatalf("expected lock without signature metadata to load, got %v", err)
+	}
+}
+
+func TestLoadRuntimeSourceLock_RejectsPartialSignatureMetadata(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "lock-partial-signature.json")
+	if err := os.WriteFile(path, []byte(`{
+  "schema_version": 1,
+  "channels": {
+    "stable": {
+      "postgresql": {
+        "version": "18.1",
+        "source_url": "https://ftp.postgresql.org/pub/source/v18.1/postgresql-18.1.tar.gz",
+        "source_sha256": "b0f18c2d6973d2aa023cfc77feda787d7bbe9c31a3977d0f04ac29885fb98ec4",
+        "public_key_fingerprint": "DEADBEEF"
+      }
+    }
+  }
+}`), 0o600); err != nil {
+		t.Fatalf("write lock file: %v", err)
+	}
+
+	_, err := LoadRuntimeSourceLock(path)
+	if err == nil {
+		t.Fatal("expected partial signature metadata validation error")
+	}
+	if !strings.Contains(err.Error(), "missing signature_url") {
+		t.Fatalf("expected missing signature_url validation error, got: %v", err)
+	}
+}

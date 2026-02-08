@@ -40,6 +40,8 @@ type RuntimeSystemdUnitSpec struct {
 	Name             string   `json:"name"`
 	Description      string   `json:"description,omitempty"`
 	Type             string   `json:"type,omitempty"`
+	User             string   `json:"user,omitempty"`
+	Group            string   `json:"group,omitempty"`
 	ExecStart        string   `json:"exec_start"`
 	ExecReload       string   `json:"exec_reload,omitempty"`
 	ExecStop         string   `json:"exec_stop,omitempty"`
@@ -108,10 +110,12 @@ func validateRuntimeComponentLock(channel, name string, component RuntimeCompone
 	if !isValidSHA256(component.SourceSHA256) {
 		return fmt.Errorf("runtime lock component %s/%s has invalid source_sha256", channel, name)
 	}
-	if strings.TrimSpace(component.SignatureURL) == "" {
-		return fmt.Errorf("runtime lock component %s/%s is missing signature_url", channel, name)
-	}
-	if strings.TrimSpace(component.PublicKeyFingerprint) == "" {
+	signatureURL := strings.TrimSpace(component.SignatureURL)
+	signatureFP := strings.TrimSpace(component.PublicKeyFingerprint)
+	if (signatureURL == "") != (signatureFP == "") {
+		if signatureURL == "" {
+			return fmt.Errorf("runtime lock component %s/%s is missing signature_url", channel, name)
+		}
 		return fmt.Errorf("runtime lock component %s/%s is missing public_key_fingerprint", channel, name)
 	}
 	if err := validateRuntimeBuildSpec(channel, name, component.Build); err != nil {

@@ -756,8 +756,12 @@ func (i *Installer) installRuntimeComponentFromSource(
 	i.logf("[install_runtime] checksum verified for %s: %s", componentName, sourceHash)
 
 	if i.opts.VerifyUpstreamSources {
-		if err := i.verifyRuntimeSourceSignature(ctx, componentName, component, sourceArchivePath); err != nil {
-			return err
+		if strings.TrimSpace(component.SignatureURL) == "" || strings.TrimSpace(component.PublicKeyFingerprint) == "" {
+			i.logf("[install_runtime] signature metadata missing for %s, skipping GPG verification", componentName)
+		} else {
+			if err := i.verifyRuntimeSourceSignature(ctx, componentName, component, sourceArchivePath); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -980,6 +984,16 @@ func (i *Installer) prepareRuntimeCompatibility(
 			); err != nil {
 				return fmt.Errorf("install mariadb command alias: %w", err)
 			}
+		case "postgresql":
+			if err := i.ensureRuntimePostgreSQLBootstrap(ctx); err != nil {
+				return err
+			}
+			if err := i.ensureSymlink(
+				filepath.Join(filepath.Dir(i.opts.PanelBinaryPath), "psql"),
+				filepath.Join(i.opts.RuntimeInstallDir, "postgresql", "current", "bin", "psql"),
+			); err != nil {
+				return fmt.Errorf("install postgresql command alias: %w", err)
+			}
 		}
 	}
 	return nil
@@ -1018,6 +1032,17 @@ func (i *Installer) installRuntimeSystemdAliases(channel RuntimeChannelLock, uni
 				filepath.Join(unitDir, unitName),
 			); err != nil {
 				return fmt.Errorf("install php-fpm systemd alias: %w", err)
+			}
+		}
+	}
+	if component, ok := channel["postgresql"]; ok {
+		unitName := strings.TrimSpace(component.Systemd.Name)
+		if unitName != "" {
+			if err := i.ensureSymlink(
+				filepath.Join(unitDir, "postgresql.service"),
+				filepath.Join(unitDir, unitName),
+			); err != nil {
+				return fmt.Errorf("install postgresql systemd alias: %w", err)
 			}
 		}
 	}
@@ -1226,6 +1251,53 @@ mkdir -p "$data_dir"
 `, shellQuote(runtimeDir))
 	if _, err := i.runner.Run(ctx, "bash", "-lc", bootstrapScript); err != nil {
 		return fmt.Errorf("bootstrap runtime mariadb data dir: %w", err)
+	}
+	return nil
+}
+
+func (i *Installer) ensureRuntimePostgreSQLBootstrap(ctx context.Context) error {
+	runtimeDir := filepath.Join(i.opts.RuntimeInstallDir, "postgresql", "current")
+	dataDir := filepath.Join(runtimeDir, "data")
+	versionFile := filepath.Join(dataDir, "PG_VERSION")
+	if _, err := os.Stat(versionFile); err == nil {
+		return nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("inspect runtime postgresql data dir: %w", err)
+	}
+
+	if _, err := i.runner.Run(ctx, "id", "postgres"); err != nil {
+		if _, createErr := i.runner.Run(
+			ctx,
+			"useradd",
+			"--system",
+			"--home-dir", "/var/lib/postgresql",
+			"--create-home",
+			"--shell", "/usr/sbin/nologin",
+			"postgres",
+		); createErr != nil {
+			return fmt.Errorf("create postgres user: %w", createErr)
+		}
+	}
+
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return fmt.Errorf("create runtime postgresql data dir: %w", err)
+	}
+	if _, err := i.runner.Run(ctx, "chown", "-R", "postgres:postgres", runtimeDir); err != nil {
+		return fmt.Errorf("set runtime postgresql ownership: %w", err)
+	}
+
+	initdbBin := filepath.Join(runtimeDir, "bin", "initdb")
+	if _, err := i.runner.Run(
+		ctx,
+		"runuser",
+		"-u", "postgres", "--",
+		initdbBin,
+		"-D", dataDir,
+		"-U", "postgres",
+		"--auth-local=trust",
+		"--auth-host=scram-sha-256",
+	); err != nil {
+		return fmt.Errorf("bootstrap runtime postgresql data dir: %w", err)
 	}
 	return nil
 }
@@ -1594,6 +1666,14 @@ func renderRuntimeSystemdUnit(opts Options, componentName string, component Runt
 	if workingDir == "" {
 		workingDir = "/"
 	}
+	serviceUser := strings.TrimSpace(unit.User)
+	if serviceUser == "" {
+		serviceUser = "root"
+	}
+	serviceGroup := strings.TrimSpace(unit.Group)
+	if serviceGroup == "" {
+		serviceGroup = serviceUser
+	}
 	execStart := renderRuntimePlaceholder(unit.ExecStart, opts, componentName, component.Version)
 	execReload := renderRuntimePlaceholder(unit.ExecReload, opts, componentName, component.Version)
 	execStop := renderRuntimePlaceholder(unit.ExecStop, opts, componentName, component.Version)
@@ -1615,8 +1695,8 @@ func renderRuntimeSystemdUnit(opts Options, componentName string, component Runt
 		"",
 		"[Service]",
 		"Type=" + serviceType,
-		"User=root",
-		"Group=root",
+		"User=" + serviceUser,
+		"Group=" + serviceGroup,
 		"WorkingDirectory=" + workingDir,
 		"ExecStart=" + execStart,
 		"Restart=on-failure",

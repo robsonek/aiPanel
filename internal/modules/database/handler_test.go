@@ -10,6 +10,7 @@ func TestIsCreateDatabaseBadRequest(t *testing.T) {
 		for _, message := range []string{
 			"site_id is required",
 			"invalid database name",
+			"invalid database engine",
 			"site not found",
 		} {
 			if !isCreateDatabaseBadRequest(errors.New(message)) {

@@ -55,6 +55,26 @@
           "name": "aipanel-runtime-mariadb.service",
           "exec_start": "{{install_dir}}/bin/mariadbd --basedir={{install_dir}} --datadir={{install_dir}}/data --plugin-dir={{install_dir}}/lib/plugin --user=root"
         }
+      },
+      "postgresql": {
+        "version": "18.1",
+        "source_url": "https://ftp.postgresql.org/pub/source/v18.1/postgresql-18.1.tar.gz",
+        "source_sha256": "b0f18c2d6973d2aa023cfc77feda787d7bbe9c31a3977d0f04ac29885fb98ec4",
+        "signature_url": "",
+        "public_key_fingerprint": "",
+        "build": {
+          "commands": [
+            "./configure --prefix={{install_dir}} --with-openssl --with-readline --with-zlib",
+            "make -j$(nproc)",
+            "make install"
+          ]
+        },
+        "systemd": {
+          "name": "aipanel-runtime-postgresql.service",
+          "user": "postgres",
+          "group": "postgres",
+          "exec_start": "{{install_dir}}/bin/postgres -D {{install_dir}}/data"
+        }
       }
     },
     "edge": {
@@ -110,6 +130,26 @@
         "systemd": {
           "name": "aipanel-runtime-mariadb.service",
           "exec_start": "{{install_dir}}/bin/mariadbd --basedir={{install_dir}} --datadir={{install_dir}}/data --plugin-dir={{install_dir}}/lib/plugin --user=root"
+        }
+      },
+      "postgresql": {
+        "version": "18.1",
+        "source_url": "https://ftp.postgresql.org/pub/source/v18.1/postgresql-18.1.tar.gz",
+        "source_sha256": "b0f18c2d6973d2aa023cfc77feda787d7bbe9c31a3977d0f04ac29885fb98ec4",
+        "signature_url": "",
+        "public_key_fingerprint": "",
+        "build": {
+          "commands": [
+            "./configure --prefix={{install_dir}} --with-openssl --with-readline --with-zlib",
+            "make -j$(nproc)",
+            "make install"
+          ]
+        },
+        "systemd": {
+          "name": "aipanel-runtime-postgresql.service",
+          "user": "postgres",
+          "group": "postgres",
+          "exec_start": "{{install_dir}}/bin/postgres -D {{install_dir}}/data"
         }
       }
     }

@@ -23,30 +23,52 @@ var (
 	databaseNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
 )
 
-// Service orchestrates MariaDB CRUD and panel metadata persistence.
+const (
+	// DBEngineMariaDB marks MariaDB-backed site database metadata.
+	DBEngineMariaDB = "mariadb"
+	// DBEnginePostgreSQL marks PostgreSQL-backed site database metadata.
+	DBEnginePostgreSQL = "postgres"
+)
+
+type databaseProvisioner interface {
+	CreateDatabase(ctx context.Context, dbName string) error
+	DropDatabase(ctx context.Context, dbName string) error
+	CreateUser(ctx context.Context, username, password, dbName string) error
+	DropUser(ctx context.Context, username string) error
+}
+
+// Service orchestrates database engine CRUD and panel metadata persistence.
 type Service struct {
-	store   *sqlite.Store
-	cfg     config.Config
-	log     *slog.Logger
-	mariadb adapter.MariaDB
+	store      *sqlite.Store
+	cfg        config.Config
+	log        *slog.Logger
+	mariadb    adapter.MariaDB
+	postgresql adapter.PostgreSQL
 }
 
 // NewService creates a database service.
-func NewService(store *sqlite.Store, cfg config.Config, log *slog.Logger, mariadb adapter.MariaDB) *Service {
+func NewService(
+	store *sqlite.Store,
+	cfg config.Config,
+	log *slog.Logger,
+	mariadb adapter.MariaDB,
+	postgresql adapter.PostgreSQL,
+) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Service{
-		store:   store,
-		cfg:     cfg,
-		log:     log,
-		mariadb: mariadb,
+		store:      store,
+		cfg:        cfg,
+		log:        log,
+		mariadb:    mariadb,
+		postgresql: postgresql,
 	}
 }
 
-// CreateDatabase provisions DB + user in MariaDB and stores metadata.
+// CreateDatabase provisions DB + user in selected engine and stores metadata.
 func (s *Service) CreateDatabase(ctx context.Context, req CreateDatabaseRequest) (CreateDatabaseResult, error) {
-	if s.store == nil || s.mariadb == nil {
+	if s.store == nil {
 		return CreateDatabaseResult{}, fmt.Errorf("database service is not fully configured")
 	}
 	if req.SiteID <= 0 {
@@ -62,13 +84,22 @@ func (s *Service) CreateDatabase(ctx context.Context, req CreateDatabaseRequest)
 		return CreateDatabaseResult{}, fmt.Errorf("site not found")
 	}
 
-	dbUser := dbUserForName(dbName)
+	engine, err := normalizeDatabaseEngine(req.DBEngine)
+	if err != nil {
+		return CreateDatabaseResult{}, err
+	}
+	provisioner, err := s.provisionerForEngine(engine)
+	if err != nil {
+		return CreateDatabaseResult{}, err
+	}
+
+	dbUser := dbUserForName(engine, dbName)
 	password, err := randomHex(12)
 	if err != nil {
 		return CreateDatabaseResult{}, fmt.Errorf("generate password: %w", err)
 	}
 
-	if err = s.mariadb.CreateDatabase(ctx, dbName); err != nil {
+	if err = provisioner.CreateDatabase(ctx, dbName); err != nil {
 		return CreateDatabaseResult{}, err
 	}
 	userCreated := false
@@ -77,12 +108,12 @@ func (s *Service) CreateDatabase(ctx context.Context, req CreateDatabaseRequest)
 			return
 		}
 		if userCreated {
-			_ = s.mariadb.DropUser(ctx, dbUser)
+			_ = provisioner.DropUser(ctx, dbUser)
 		}
-		_ = s.mariadb.DropDatabase(ctx, dbName)
+		_ = provisioner.DropDatabase(ctx, dbName)
 	}()
 
-	if err = s.mariadb.CreateUser(ctx, dbUser, password, dbName); err != nil {
+	if err = provisioner.CreateUser(ctx, dbUser, password, dbName); err != nil {
 		return CreateDatabaseResult{}, err
 	}
 	userCreated = true
@@ -90,18 +121,19 @@ func (s *Service) CreateDatabase(ctx context.Context, req CreateDatabaseRequest)
 	nowUnix := time.Now().Unix()
 	insert := fmt.Sprintf(`
 INSERT INTO site_databases(site_id, db_name, db_user, db_engine, created_at)
-VALUES(%d,'%s','%s','mariadb',%d);`,
+VALUES(%d,'%s','%s','%s',%d);`,
 		req.SiteID,
 		sqlEscape(dbName),
 		sqlEscape(dbUser),
+		sqlEscape(engine),
 		nowUnix,
 	)
 	if err = s.store.ExecPanel(ctx, insert); err != nil {
 		return CreateDatabaseResult{}, fmt.Errorf("insert database row: %w", err)
 	}
-	_ = s.writeAudit(ctx, req.Actor, "database.create", "db="+dbName)
+	_ = s.writeAudit(ctx, req.Actor, "database.create", "db="+dbName+",engine="+engine)
 
-	db, err := s.getByName(ctx, dbName)
+	db, err := s.getByNameAndEngine(ctx, dbName, engine)
 	if err != nil {
 		return CreateDatabaseResult{}, err
 	}
@@ -168,24 +200,42 @@ ORDER BY id DESC;`, siteID)
 
 // DeleteDatabase drops DB user + DB and removes metadata row.
 func (s *Service) DeleteDatabase(ctx context.Context, id int64, actor string) error {
-	if s.store == nil || s.mariadb == nil {
+	if s.store == nil {
 		return fmt.Errorf("database service is not fully configured")
 	}
 	db, err := s.getByID(ctx, id)
 	if err != nil {
 		return err
 	}
-	if err = s.mariadb.DropUser(ctx, db.DBUser); err != nil {
+	engine, err := normalizeDatabaseEngine(db.DBEngine)
+	if err != nil {
 		return err
 	}
-	if err = s.mariadb.DropDatabase(ctx, db.DBName); err != nil {
+	provisioner, err := s.provisionerForEngine(engine)
+	if err != nil {
 		return err
+	}
+	switch engine {
+	case DBEnginePostgreSQL:
+		if err = provisioner.DropDatabase(ctx, db.DBName); err != nil {
+			return err
+		}
+		if err = provisioner.DropUser(ctx, db.DBUser); err != nil {
+			return err
+		}
+	default:
+		if err = provisioner.DropUser(ctx, db.DBUser); err != nil {
+			return err
+		}
+		if err = provisioner.DropDatabase(ctx, db.DBName); err != nil {
+			return err
+		}
 	}
 	del := fmt.Sprintf("DELETE FROM site_databases WHERE id = %d;", id)
 	if err = s.store.ExecPanel(ctx, del); err != nil {
 		return fmt.Errorf("delete database row: %w", err)
 	}
-	_ = s.writeAudit(ctx, actor, "database.delete", "db="+db.DBName)
+	_ = s.writeAudit(ctx, actor, "database.delete", "db="+db.DBName+",engine="+engine)
 	return nil
 }
 
@@ -214,15 +264,15 @@ LIMIT 1;`, id)
 	return mapRowToDatabase(rows[0])
 }
 
-func (s *Service) getByName(ctx context.Context, dbName string) (SiteDatabase, error) {
+func (s *Service) getByNameAndEngine(ctx context.Context, dbName, dbEngine string) (SiteDatabase, error) {
 	query := fmt.Sprintf(`
 SELECT id, site_id, db_name, db_user, db_engine, created_at
 FROM site_databases
-WHERE db_name = '%s'
-LIMIT 1;`, sqlEscape(dbName))
+WHERE db_name = '%s' AND db_engine = '%s'
+LIMIT 1;`, sqlEscape(dbName), sqlEscape(dbEngine))
 	rows, err := s.store.QueryPanelJSON(ctx, query)
 	if err != nil {
-		return SiteDatabase{}, fmt.Errorf("get database by name: %w", err)
+		return SiteDatabase{}, fmt.Errorf("get database by name and engine: %w", err)
 	}
 	if len(rows) == 0 {
 		return SiteDatabase{}, ErrDatabaseNotFound
@@ -246,6 +296,9 @@ func mapRowToDatabase(row map[string]any) (SiteDatabase, error) {
 	dbName, _ := row["db_name"].(string)
 	dbUser, _ := row["db_user"].(string)
 	dbEngine, _ := row["db_engine"].(string)
+	if strings.TrimSpace(dbEngine) == "" {
+		dbEngine = DBEngineMariaDB
+	}
 	return SiteDatabase{
 		ID:        id,
 		SiteID:    siteID,
@@ -256,7 +309,7 @@ func mapRowToDatabase(row map[string]any) (SiteDatabase, error) {
 	}, nil
 }
 
-func dbUserForName(dbName string) string {
+func dbUserForName(engine, dbName string) string {
 	base := strings.ToLower(strings.TrimSpace(dbName))
 	base = strings.Map(func(r rune) rune {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
@@ -264,11 +317,47 @@ func dbUserForName(dbName string) string {
 		}
 		return '_'
 	}, base)
-	if len(base) > 18 {
-		base = base[:18]
+	limit := 18
+	prefix := "u_"
+	if strings.EqualFold(engine, DBEnginePostgreSQL) {
+		prefix = "p_"
+		limit = 16
+	}
+	if len(base) > limit {
+		base = base[:limit]
 	}
 	suffix, _ := randomHex(3)
-	return "u_" + base + "_" + suffix
+	return prefix + base + "_" + suffix
+}
+
+func normalizeDatabaseEngine(raw string) (string, error) {
+	engine := strings.ToLower(strings.TrimSpace(raw))
+	if engine == "" {
+		return DBEngineMariaDB, nil
+	}
+	switch engine {
+	case DBEngineMariaDB, DBEnginePostgreSQL:
+		return engine, nil
+	default:
+		return "", fmt.Errorf("invalid database engine")
+	}
+}
+
+func (s *Service) provisionerForEngine(engine string) (databaseProvisioner, error) {
+	switch engine {
+	case DBEngineMariaDB:
+		if s.mariadb == nil {
+			return nil, fmt.Errorf("database engine mariadb is not configured")
+		}
+		return s.mariadb, nil
+	case DBEnginePostgreSQL:
+		if s.postgresql == nil {
+			return nil, fmt.Errorf("database engine postgres is not configured")
+		}
+		return s.postgresql, nil
+	default:
+		return nil, fmt.Errorf("invalid database engine")
+	}
 }
 
 func randomHex(n int) (string, error) {

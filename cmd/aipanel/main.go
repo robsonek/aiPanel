@@ -146,7 +146,8 @@ func runServer() {
 	phpfpmAdapter := hosting.NewPHPFPMAdapter(runner, hosting.PHPFPMAdapterOptions{})
 	hostingSvc := hosting.NewService(store, cfg, log, runner, nginxAdapter, phpfpmAdapter)
 	mariadbAdapter := database.NewMariaDBAdapter(runner)
-	databaseSvc := database.NewService(store, cfg, log, mariadbAdapter)
+	postgresAdapter := database.NewPostgreSQLAdapter(runner)
+	databaseSvc := database.NewService(store, cfg, log, mariadbAdapter, postgresAdapter)
 
 	log.Info("aiPanel starting", "addr", cfg.Addr, "env", cfg.Env, "config_path", cfgPath, "data_dir", cfg.DataDir)
 

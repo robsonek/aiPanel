@@ -124,6 +124,9 @@
       "sitePlaceholder": "Select site",
       "dbNameLabel": "Database Name",
       "dbNamePlaceholder": "app_db",
+      "engineLabel": "Engine",
+      "engineMariaDB": "MariaDB",
+      "enginePostgreSQL": "PostgreSQL",
       "submit": "Create Database",
       "submitting": "Creating database..."
     },

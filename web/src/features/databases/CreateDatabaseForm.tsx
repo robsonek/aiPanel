@@ -22,6 +22,7 @@ export function CreateDatabaseForm({
 }: CreateDatabaseFormProps) {
   const { t } = useTranslation()
   const [dbName, setDBName] = useState('')
+  const [dbEngine, setDBEngine] = useState<'mariadb' | 'postgres'>('mariadb')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -47,7 +48,7 @@ export function CreateDatabaseForm({
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ db_name: normalizedName }),
+        body: JSON.stringify({ db_name: normalizedName, db_engine: dbEngine }),
       })
       if (!res.ok) {
         const message = await res.text()
@@ -93,6 +94,18 @@ export function CreateDatabaseForm({
           maxLength={64}
           required
         />
+      </label>
+
+      <label className="block">
+        <span className="mb-1 block text-sm">{t('databases.create.engineLabel')}</span>
+        <select
+          className="w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
+          value={dbEngine}
+          onChange={(e) => setDBEngine(e.target.value as 'mariadb' | 'postgres')}
+        >
+          <option value="mariadb">{t('databases.create.engineMariaDB')}</option>
+          <option value="postgres">{t('databases.create.enginePostgreSQL')}</option>
+        </select>
       </label>
 
       {error ? (

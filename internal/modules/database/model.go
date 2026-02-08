@@ -14,9 +14,10 @@ type SiteDatabase struct {
 
 // CreateDatabaseRequest contains payload for DB creation.
 type CreateDatabaseRequest struct {
-	SiteID int64  `json:"site_id"`
-	DBName string `json:"db_name"`
-	Actor  string `json:"-"`
+	SiteID   int64  `json:"site_id"`
+	DBName   string `json:"db_name"`
+	DBEngine string `json:"db_engine,omitempty"`
+	Actor    string `json:"-"`
 }
 
 // CreateDatabaseResult includes one-time password for the new DB user.

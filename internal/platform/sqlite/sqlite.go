@@ -72,7 +72,7 @@ CREATE INDEX IF NOT EXISTS idx_sites_domain ON sites(domain);
 CREATE TABLE IF NOT EXISTS site_databases (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   site_id INTEGER NOT NULL,
-  db_name TEXT NOT NULL UNIQUE,
+  db_name TEXT NOT NULL,
   db_user TEXT NOT NULL,
   db_engine TEXT NOT NULL DEFAULT 'mariadb',
   created_at INTEGER NOT NULL,
@@ -82,6 +82,9 @@ CREATE INDEX IF NOT EXISTS idx_site_databases_site_id ON site_databases(site_id)
 `
 	if err := s.exec(ctx, s.PanelDB, panelSchema); err != nil {
 		return fmt.Errorf("apply panel schema: %w", err)
+	}
+	if err := s.migrateSiteDatabasesTable(ctx); err != nil {
+		return err
 	}
 
 	auditSchema := `
@@ -153,4 +156,75 @@ func (s *Store) queryJSON(ctx context.Context, dbPath, sql string) ([]map[string
 		return nil, fmt.Errorf("decode sqlite json: %w", err)
 	}
 	return rows, nil
+}
+
+func (s *Store) migrateSiteDatabasesTable(ctx context.Context) error {
+	schemaRows, err := s.queryJSON(ctx, s.PanelDB, `
+SELECT sql
+FROM sqlite_master
+WHERE type='table' AND name='site_databases'
+LIMIT 1;`)
+	if err != nil {
+		return fmt.Errorf("inspect site_databases schema: %w", err)
+	}
+	if len(schemaRows) == 0 {
+		return nil
+	}
+	tableSQL, _ := schemaRows[0]["sql"].(string)
+	legacyUniqueDBName := strings.Contains(
+		strings.ToLower(strings.ReplaceAll(tableSQL, "`", "")),
+		"db_name text not null unique",
+	)
+
+	columnRows, err := s.queryJSON(ctx, s.PanelDB, "PRAGMA table_info(site_databases);")
+	if err != nil {
+		return fmt.Errorf("inspect site_databases columns: %w", err)
+	}
+	hasDBEngine := false
+	for _, row := range columnRows {
+		columnName, _ := row["name"].(string)
+		if columnName == "db_engine" {
+			hasDBEngine = true
+			break
+		}
+	}
+
+	if legacyUniqueDBName || !hasDBEngine {
+		selectDBEngine := "COALESCE(NULLIF(db_engine,''), 'mariadb')"
+		if !hasDBEngine {
+			selectDBEngine = "'mariadb'"
+		}
+		migrationSQL := fmt.Sprintf(`
+PRAGMA foreign_keys=OFF;
+BEGIN IMMEDIATE;
+ALTER TABLE site_databases RENAME TO site_databases_legacy;
+CREATE TABLE site_databases (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  site_id INTEGER NOT NULL,
+  db_name TEXT NOT NULL,
+  db_user TEXT NOT NULL,
+  db_engine TEXT NOT NULL DEFAULT 'mariadb',
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY(site_id) REFERENCES sites(id) ON DELETE CASCADE
+);
+INSERT INTO site_databases(id, site_id, db_name, db_user, db_engine, created_at)
+SELECT id, site_id, db_name, db_user, %s, created_at
+FROM site_databases_legacy;
+DROP TABLE site_databases_legacy;
+COMMIT;
+PRAGMA foreign_keys=ON;
+`, selectDBEngine)
+		if err := s.exec(ctx, s.PanelDB, migrationSQL); err != nil {
+			return fmt.Errorf("migrate site_databases table: %w", err)
+		}
+	}
+
+	indexesSQL := `
+CREATE INDEX IF NOT EXISTS idx_site_databases_site_id ON site_databases(site_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_site_databases_engine_name ON site_databases(db_engine, db_name);
+`
+	if err := s.exec(ctx, s.PanelDB, indexesSQL); err != nil {
+		return fmt.Errorf("ensure site_databases indexes: %w", err)
+	}
+	return nil
 }

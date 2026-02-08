@@ -31,16 +31,18 @@ func (h *Handler) HandleSiteDatabases(w http.ResponseWriter, r *http.Request, si
 		writeJSON(w, http.StatusOK, map[string]any{"databases": dbs})
 	case http.MethodPost:
 		var payload struct {
-			DBName string `json:"db_name"`
+			DBName   string `json:"db_name"`
+			DBEngine string `json:"db_engine"`
 		}
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&payload); err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
 		res, err := h.svc.CreateDatabase(r.Context(), CreateDatabaseRequest{
-			SiteID: siteID,
-			DBName: payload.DBName,
-			Actor:  actor,
+			SiteID:   siteID,
+			DBName:   payload.DBName,
+			DBEngine: payload.DBEngine,
+			Actor:    actor,
 		})
 		if err != nil {
 			if isCreateDatabaseBadRequest(err) {
@@ -102,7 +104,7 @@ func isCreateDatabaseBadRequest(err error) bool {
 		return false
 	}
 	switch strings.TrimSpace(err.Error()) {
-	case "site_id is required", "invalid database name", "site not found":
+	case "site_id is required", "invalid database name", "invalid database engine", "site not found":
 		return true
 	default:
 		return false
