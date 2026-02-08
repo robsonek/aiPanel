@@ -802,7 +802,7 @@ func (i *Installer) installRuntimeComponentFromSource(
 	if err := os.RemoveAll(versionDir); err != nil {
 		return fmt.Errorf("reset runtime component dir %s: %w", componentName, err)
 	}
-	if err := os.MkdirAll(versionDir, 0o750); err != nil {
+	if err := os.MkdirAll(versionDir, 0o755); err != nil {
 		return fmt.Errorf("create runtime component dir %s: %w", componentName, err)
 	}
 
@@ -1371,6 +1371,9 @@ mkdir -p "$data_dir"
 
 func (i *Installer) ensureRuntimePostgreSQLBootstrap(ctx context.Context) error {
 	runtimeDir := filepath.Join(i.opts.RuntimeInstallDir, "postgresql", "current")
+	runtimeComponentDir := filepath.Join(i.opts.RuntimeInstallDir, "postgresql")
+	runtimeRootDir := filepath.Clean(i.opts.RuntimeInstallDir)
+	runtimeParentDir := filepath.Clean(filepath.Dir(runtimeRootDir))
 	dataDir := filepath.Join(runtimeDir, "data")
 	versionFile := filepath.Join(dataDir, "PG_VERSION")
 	if _, err := os.Stat(versionFile); err == nil {
@@ -1391,6 +1394,24 @@ func (i *Installer) ensureRuntimePostgreSQLBootstrap(ctx context.Context) error 
 		); createErr != nil {
 			return fmt.Errorf("create postgres user: %w", createErr)
 		}
+	}
+
+	// PostgreSQL runtime runs as non-root, so the runtime path must be traversable.
+	for _, dir := range []string{runtimeParentDir, runtimeRootDir, runtimeComponentDir} {
+		if strings.TrimSpace(dir) == "" || dir == "." || dir == string(os.PathSeparator) {
+			continue
+		}
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create runtime directory %s: %w", dir, err)
+		}
+		if err := os.Chmod(dir, 0o755); err != nil {
+			return fmt.Errorf("set runtime directory permissions for %s: %w", dir, err)
+		}
+	}
+
+	if resolved, err := filepath.EvalSymlinks(runtimeDir); err == nil {
+		runtimeDir = resolved
+		dataDir = filepath.Join(runtimeDir, "data")
 	}
 
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
@@ -1860,14 +1881,28 @@ func (i *Installer) prepareDirectories(_ context.Context) error {
 		filepath.Dir(i.opts.LogFilePath):     {},
 	}
 	if isRuntimeSourceMode(i.opts.InstallMode) {
+		dirs[filepath.Dir(i.opts.RuntimeInstallDir)] = struct{}{}
 		dirs[i.opts.RuntimeInstallDir] = struct{}{}
 	}
+	runtimeRootDir := filepath.Clean(i.opts.RuntimeInstallDir)
+	runtimeParentDir := filepath.Clean(filepath.Dir(runtimeRootDir))
 	for dir := range dirs {
 		if strings.TrimSpace(dir) == "" || dir == "." {
 			continue
 		}
-		if err := os.MkdirAll(dir, 0o750); err != nil {
+		mode := os.FileMode(0o750)
+		cleanDir := filepath.Clean(dir)
+		if isRuntimeSourceMode(i.opts.InstallMode) &&
+			(cleanDir == runtimeRootDir || cleanDir == runtimeParentDir) {
+			mode = 0o755
+		}
+		if err := os.MkdirAll(cleanDir, mode); err != nil {
 			return fmt.Errorf("mkdir %s: %w", dir, err)
+		}
+		if mode == 0o755 {
+			if err := os.Chmod(cleanDir, mode); err != nil {
+				return fmt.Errorf("chmod %s: %w", dir, err)
+			}
 		}
 	}
 	return nil
