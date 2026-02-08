@@ -2505,13 +2505,25 @@ func (i *Installer) installPGAdmin(ctx context.Context) error {
 	}
 	i.logf("[install_pgadmin] checksum verified: %s", actualChecksum)
 
-	wheelPath, writeErr := writeTempBytes("aipanel-pgadmin-*.whl", wheelData)
-	if writeErr != nil {
-		return fmt.Errorf("write pgAdmin wheel temp file: %w", writeErr)
+	wheelURL, parseErr := url.Parse(strings.TrimSpace(i.opts.PGAdminURL))
+	if parseErr != nil {
+		return fmt.Errorf("parse pgAdmin wheel URL: %w", parseErr)
+	}
+	wheelFileName := filepath.Base(strings.TrimSpace(wheelURL.Path))
+	if !strings.HasSuffix(strings.ToLower(wheelFileName), ".whl") {
+		wheelFileName = "pgadmin4-9.12-py3-none-any.whl"
+	}
+	wheelTempDir, mkErr := os.MkdirTemp("", "aipanel-pgadmin-wheel-*")
+	if mkErr != nil {
+		return fmt.Errorf("create pgAdmin wheel temp dir: %w", mkErr)
 	}
 	defer func() {
-		_ = os.Remove(wheelPath)
+		_ = os.RemoveAll(wheelTempDir)
 	}()
+	wheelPath := filepath.Join(wheelTempDir, wheelFileName)
+	if err := os.WriteFile(wheelPath, wheelData, 0o600); err != nil {
+		return fmt.Errorf("write pgAdmin wheel temp file: %w", err)
+	}
 
 	if i.opts.VerifyUpstreamSources &&
 		strings.TrimSpace(i.opts.PGAdminSignatureURL) != "" &&
@@ -3173,7 +3185,7 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Script-Name {{ .PGAdminPath }};
-        proxy_pass http://127.0.0.1:{{ .PGAdminPort }}/;
+        proxy_pass http://127.0.0.1:{{ .PGAdminPort }};
     }
 {{ end -}}
 
