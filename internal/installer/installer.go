@@ -63,6 +63,7 @@ const (
 	defaultRuntimeNginxConf     = "/opt/aipanel/runtime/nginx/current/conf/nginx.conf"
 	defaultRuntimeNginxService  = "aipanel-runtime-nginx.service"
 	defaultRuntimePHPFPMService = "aipanel-runtime-php-fpm.service"
+	defaultRuntimeLockURL       = "https://raw.githubusercontent.com/robsonek/aiPanel/main/configs/sources/lock.json"
 )
 
 // Options controls installer behavior.
@@ -82,8 +83,10 @@ type Options struct {
 	InstallMode           string
 	RuntimeChannel        string
 	RuntimeLockPath       string
+	RuntimeLockURL        string
 	RuntimeInstallDir     string
 	VerifyUpstreamSources bool
+	ForceAllSteps         bool
 	ReverseProxy          bool
 	PanelDomain           string
 	PHPMyAdminURL         string
@@ -151,6 +154,7 @@ func DefaultOptions() Options {
 		InstallMode:            InstallModeSourceBuild,
 		RuntimeChannel:         RuntimeChannelStable,
 		RuntimeLockPath:        "/etc/aipanel/sources.lock.json",
+		RuntimeLockURL:         defaultRuntimeLockURL,
 		RuntimeInstallDir:      "/opt/aipanel/runtime",
 		VerifyUpstreamSources:  true,
 		ReverseProxy:           false,
@@ -238,8 +242,9 @@ func (o Options) withDefaults() Options {
 	if strings.TrimSpace(o.RuntimeChannel) == "" {
 		o.RuntimeChannel = d.RuntimeChannel
 	}
-	if strings.TrimSpace(o.RuntimeLockPath) == "" {
+	if strings.TrimSpace(o.RuntimeLockPath) == "" && strings.TrimSpace(o.RuntimeLockURL) == "" {
 		o.RuntimeLockPath = d.RuntimeLockPath
+		o.RuntimeLockURL = d.RuntimeLockURL
 	}
 	if strings.TrimSpace(o.RuntimeInstallDir) == "" {
 		o.RuntimeInstallDir = d.RuntimeInstallDir
@@ -343,8 +348,9 @@ func (o Options) validate() error {
 
 	if isRuntimeSourceMode(mode) &&
 		requiresRuntimeLockForStep(o.OnlyStep) &&
-		strings.TrimSpace(o.RuntimeLockPath) == "" {
-		return fmt.Errorf("%s mode requires runtime lock path", mode)
+		strings.TrimSpace(o.RuntimeLockPath) == "" &&
+		strings.TrimSpace(o.RuntimeLockURL) == "" {
+		return fmt.Errorf("%s mode requires runtime lock path or runtime lock URL", mode)
 	}
 	if isRuntimeSourceMode(mode) &&
 		requiresRuntimeLockForStep(o.OnlyStep) &&
@@ -724,7 +730,7 @@ func (i *Installer) Run(ctx context.Context) (*Report, error) {
 			if runErr != nil {
 				break
 			}
-			runErr = execStep(step.name, step.fn, false)
+			runErr = execStep(step.name, step.fn, i.opts.ForceAllSteps)
 		}
 	}
 
@@ -1468,6 +1474,27 @@ func (i *Installer) resolveRuntimeSourceLock(ctx context.Context) (*RuntimeSourc
 	if i.runtimeLock != nil {
 		return i.runtimeLock, nil
 	}
+	lockURL := strings.TrimSpace(i.opts.RuntimeLockURL)
+	if lockURL != "" {
+		payload, err := i.downloadBytes(ctx, lockURL)
+		if err != nil {
+			return nil, fmt.Errorf("download runtime lock URL: %w", err)
+		}
+		var lock RuntimeSourceLock
+		if err := json.Unmarshal(payload, &lock); err != nil {
+			return nil, fmt.Errorf("decode runtime lock URL: %w", err)
+		}
+		if err := lock.Validate(); err != nil {
+			return nil, fmt.Errorf("validate runtime lock URL: %w", err)
+		}
+		if p := strings.TrimSpace(i.opts.RuntimeLockPath); p != "" {
+			if err := writeBinaryFile(p, payload, 0o644); err != nil {
+				return nil, fmt.Errorf("persist runtime lock file: %w", err)
+			}
+		}
+		i.runtimeLock = &lock
+		return i.runtimeLock, nil
+	}
 	if p := strings.TrimSpace(i.opts.RuntimeLockPath); p != "" {
 		lock, err := LoadRuntimeSourceLock(p)
 		if err != nil {
@@ -1476,7 +1503,7 @@ func (i *Installer) resolveRuntimeSourceLock(ctx context.Context) (*RuntimeSourc
 		i.runtimeLock = lock
 		return i.runtimeLock, nil
 	}
-	return nil, fmt.Errorf("missing runtime lock path")
+	return nil, fmt.Errorf("missing runtime lock path and runtime lock URL")
 }
 
 func (i *Installer) runtimeChannel(lock *RuntimeSourceLock) (RuntimeChannelLock, error) {

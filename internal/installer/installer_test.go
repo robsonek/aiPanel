@@ -163,6 +163,7 @@ func TestInstallerRun_Phase1DrySystem(t *testing.T) {
 	opts.SkipHealthcheck = true
 	opts.MinCPU = 1
 	opts.InstallMode = InstallModeSourceBuild
+	opts.RuntimeLockURL = ""
 
 	lockPath := filepath.Join(root, "configs", "sources", "lock.json")
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o750); err != nil {
@@ -186,6 +187,7 @@ func TestInstallerRun_Phase1DrySystem(t *testing.T) {
 		t.Fatalf("write runtime lock: %v", err)
 	}
 	opts.RuntimeLockPath = lockPath
+	opts.RuntimeLockURL = ""
 	opts.RuntimeInstallDir = filepath.Join(root, "opt", "aipanel", "runtime")
 
 	if err := os.MkdirAll(filepath.Dir(opts.StateFilePath), 0o750); err != nil {
@@ -522,6 +524,7 @@ func TestInstallerRun_SourceBuildCompilesRuntime(t *testing.T) {
 	opts.InstallMode = InstallModeSourceBuild
 	opts.RuntimeChannel = RuntimeChannelStable
 	opts.RuntimeLockPath = lockPath
+	opts.RuntimeLockURL = ""
 	opts.RuntimeInstallDir = filepath.Join(root, "opt", "aipanel", "runtime")
 	opts.VerifyUpstreamSources = false
 
@@ -647,6 +650,7 @@ func TestInstallerRun_OnlyRuntimeComponentsInstallsSelectedComponent(t *testing.
 	opts.InstallMode = InstallModeSourceBuild
 	opts.RuntimeChannel = RuntimeChannelStable
 	opts.RuntimeLockPath = lockPath
+	opts.RuntimeLockURL = ""
 	opts.RuntimeInstallDir = filepath.Join(root, "opt", "aipanel", "runtime")
 	opts.PanelBinaryPath = filepath.Join(root, "usr", "local", "bin", "aipanel")
 	opts.UnitFilePath = filepath.Join(root, "etc", "systemd", "system", "aipanel.service")
@@ -842,6 +846,66 @@ func TestInstallerRun_OnlyInstallPGAdmin(t *testing.T) {
 	}
 	if !strings.Contains(joined, "systemctl enable --now aipanel-pgadmin.service") {
 		t.Fatalf("expected pgAdmin service enable command, got:\n%s", joined)
+	}
+}
+
+func TestResolveRuntimeSourceLock_DownloadsFromURLAndPersists(t *testing.T) {
+	lockJSON := `{
+  "schema_version": 1,
+  "channels": {
+    "stable": {
+      "nginx": {
+        "version": "1.29.5",
+        "source_url": "https://nginx.org/download/nginx-1.29.5.tar.gz",
+        "source_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "signature_url": "https://nginx.org/download/nginx-1.29.5.tar.gz.asc",
+        "public_key_fingerprint": "43387825DDB1BB97EC36BA5D007C8D7C15D87369"
+      }
+    }
+  }
+}`
+
+	root := t.TempDir()
+	sourceLockPath := filepath.Join(root, "source.lock.json")
+	if err := os.WriteFile(sourceLockPath, []byte(lockJSON), 0o600); err != nil {
+		t.Fatalf("write source runtime lock: %v", err)
+	}
+	lockPath := filepath.Join(root, "sources.lock.json")
+
+	opts := DefaultOptions()
+	opts.RuntimeLockPath = lockPath
+	opts.RuntimeLockURL = "file://" + sourceLockPath
+
+	ins := New(opts, &fakeRunner{})
+	lock, err := ins.resolveRuntimeSourceLock(context.Background())
+	if err != nil {
+		t.Fatalf("resolve runtime lock from URL: %v", err)
+	}
+	if lock == nil {
+		t.Fatal("expected runtime lock to be loaded")
+	}
+	nginx, ok := lock.Channels["stable"]["nginx"]
+	if !ok {
+		t.Fatalf("expected nginx component in stable channel, got %+v", lock.Channels)
+	}
+	if nginx.Version != "1.29.5" {
+		t.Fatalf("unexpected nginx version: %s", nginx.Version)
+	}
+
+	persisted, err := os.ReadFile(lockPath) //nolint:gosec // test reads file generated under temp dir.
+	if err != nil {
+		t.Fatalf("read persisted runtime lock: %v", err)
+	}
+	if !strings.Contains(string(persisted), "\"schema_version\": 1") {
+		t.Fatalf("unexpected persisted runtime lock content: %s", string(persisted))
+	}
+	if err := os.Remove(sourceLockPath); err != nil {
+		t.Fatalf("remove source runtime lock fixture: %v", err)
+	}
+
+	_, err = ins.resolveRuntimeSourceLock(context.Background())
+	if err != nil {
+		t.Fatalf("second resolve should use cache: %v", err)
 	}
 }
 

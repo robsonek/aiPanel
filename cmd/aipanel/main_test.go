@@ -319,6 +319,27 @@ func TestInstallFlagValuesToOptions_OnlyStepPGAdminEnablesPGAdmin(t *testing.T) 
 	}
 }
 
+func TestInstallFlagValuesToOptions_RuntimeLockURL(t *testing.T) {
+	defaults := installer.DefaultOptions()
+	fs, values := newInstallFlagSet(defaults)
+	if err := fs.Parse([]string{
+		"--runtime-lock-path", "",
+		"--runtime-lock-url", "https://example.com/custom-lock.json",
+	}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+	opts, _, err := values.toOptions(defaults)
+	if err != nil {
+		t.Fatalf("toOptions error: %v", err)
+	}
+	if opts.RuntimeLockPath != "" {
+		t.Fatalf("expected runtime lock path to be empty, got %q", opts.RuntimeLockPath)
+	}
+	if opts.RuntimeLockURL != "https://example.com/custom-lock.json" {
+		t.Fatalf("runtime lock URL mismatch: got %q", opts.RuntimeLockURL)
+	}
+}
+
 func TestInstallFlagValuesToOptions_LetsEncrypt(t *testing.T) {
 	defaults := installer.DefaultOptions()
 	fs, values := newInstallFlagSet(defaults)

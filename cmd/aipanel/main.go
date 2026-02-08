@@ -64,6 +64,9 @@ func main() {
 	case "install":
 		runInstall(args[1:])
 		return
+	case "update":
+		runUpdate(args[1:])
+		return
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", args[0])
 		printUsage(os.Stderr)
@@ -90,11 +93,13 @@ func printUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "  serve          start panel server (default when no command is provided)")
 	_, _ = fmt.Fprintln(w, "  admin create   create admin user")
 	_, _ = fmt.Fprintln(w, "  install        run installer")
+	_, _ = fmt.Fprintln(w, "  update         rerun all installer steps (ignores checkpoints)")
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "examples:")
 	_, _ = fmt.Fprintln(w, "  aipanel serve")
 	_, _ = fmt.Fprintln(w, "  aipanel admin create --email admin@example.com --password Secret123!")
 	_, _ = fmt.Fprintln(w, "  aipanel install")
+	_, _ = fmt.Fprintln(w, "  aipanel update")
 }
 
 func ensureRequiredTools(scope string, required []string) error {
@@ -239,6 +244,30 @@ func runInstall(args []string) {
 	runInstaller(opts, dryRun)
 }
 
+func runUpdate(args []string) {
+	defaults := installer.DefaultOptions()
+	fs, values := newInstallFlagSet(defaults)
+	if len(args) == 1 && isHelpArg(args[0]) {
+		printUpdateUsage(os.Stdout, fs)
+		return
+	}
+	fs.SetOutput(os.Stderr)
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	opts, dryRun, err := values.toOptions(defaults)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(2)
+	}
+	if strings.TrimSpace(opts.OnlyStep) != "" {
+		fmt.Fprintln(os.Stderr, "--only is not supported with update; use 'aipanel install --only <step>'")
+		os.Exit(2)
+	}
+	opts.ForceAllSteps = true
+	runInstaller(opts, dryRun)
+}
+
 type installFlagValues struct {
 	addr            *string
 	env             *string
@@ -254,6 +283,7 @@ type installFlagValues struct {
 	installMode     *string
 	runtimeChannel  *string
 	runtimeLockPath *string
+	runtimeLockURL  *string
 	runtimeInstall  *string
 	reverseProxy    *bool
 	panelDomain     *string
@@ -282,6 +312,7 @@ func newInstallFlagSet(defaults installer.Options) (*flag.FlagSet, *installFlagV
 		installMode:     fs.String("install-mode", defaults.InstallMode, "runtime install mode: source-build"),
 		runtimeChannel:  fs.String("runtime-channel", defaults.RuntimeChannel, "runtime release channel: stable|edge"),
 		runtimeLockPath: fs.String("runtime-lock-path", defaults.RuntimeLockPath, "runtime source lock file path"),
+		runtimeLockURL:  fs.String("runtime-lock-url", defaults.RuntimeLockURL, "runtime source lock URL (downloaded before install)"),
 		runtimeInstall:  fs.String("runtime-install-dir", defaults.RuntimeInstallDir, "runtime install directory for source runtime modes"),
 		reverseProxy:    fs.Bool("reverse-proxy", defaults.ReverseProxy, "bind panel to loopback and expose via nginx reverse proxy"),
 		panelDomain:     fs.String("panel-domain", "", "panel domain for nginx server_name (required with --reverse-proxy)"),
@@ -311,6 +342,7 @@ func (v *installFlagValues) toOptions(defaults installer.Options) (installer.Opt
 	opts.InstallMode = strings.TrimSpace(*v.installMode)
 	opts.RuntimeChannel = strings.TrimSpace(*v.runtimeChannel)
 	opts.RuntimeLockPath = strings.TrimSpace(*v.runtimeLockPath)
+	opts.RuntimeLockURL = strings.TrimSpace(*v.runtimeLockURL)
 	opts.RuntimeInstallDir = strings.TrimSpace(*v.runtimeInstall)
 	opts.OnlyStep = strings.ToLower(strings.TrimSpace(*v.onlyStep))
 	opts.SkipPGAdmin = !*v.installPGAdmin
@@ -344,6 +376,16 @@ func printInstallUsage(w io.Writer, fs *flag.FlagSet) {
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "Legacy non-interactive mode:")
 	_, _ = fmt.Fprintln(w, "  aipanel install [flags]")
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "flags:")
+	fs.SetOutput(w)
+	fs.PrintDefaults()
+}
+
+func printUpdateUsage(w io.Writer, fs *flag.FlagSet) {
+	_, _ = fmt.Fprintln(w, "usage: aipanel update [flags]")
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "Runs full installer refresh and ignores checkpoint skips.")
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "flags:")
 	fs.SetOutput(w)
@@ -573,12 +615,14 @@ func runInstaller(opts installer.Options, dryRun bool) {
 	runner := systemd.ExecRunner{DryRun: dryRun}
 	ins := installer.New(opts, runner)
 	fmt.Printf(
-		"installer start: mode=%s channel=%s lock=%s runtime_dir=%s only_step=%s verify_signatures=%t dry_run=%t\n",
+		"installer start: mode=%s channel=%s lock=%s lock_url=%s runtime_dir=%s only_step=%s force_all=%t verify_signatures=%t dry_run=%t\n",
 		opts.InstallMode,
 		opts.RuntimeChannel,
 		opts.RuntimeLockPath,
+		opts.RuntimeLockURL,
 		opts.RuntimeInstallDir,
 		opts.OnlyStep,
+		opts.ForceAllSteps,
 		opts.VerifyUpstreamSources,
 		dryRun,
 	)

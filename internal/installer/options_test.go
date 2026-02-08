@@ -37,9 +37,20 @@ func TestOptionsValidate(t *testing.T) {
 		opts := DefaultOptions()
 		opts.InstallMode = InstallModeSourceBuild
 		opts.RuntimeLockPath = ""
+		opts.RuntimeLockURL = ""
 		err := opts.validate()
-		if err == nil || !strings.Contains(err.Error(), "requires runtime lock path") {
+		if err == nil || !strings.Contains(err.Error(), "requires runtime lock path or runtime lock URL") {
 			t.Fatalf("expected source-build dependency validation error, got %v", err)
+		}
+	})
+
+	t.Run("source-build mode accepts runtime lock URL without local path", func(t *testing.T) {
+		opts := DefaultOptions()
+		opts.InstallMode = InstallModeSourceBuild
+		opts.RuntimeLockPath = ""
+		opts.RuntimeLockURL = "https://raw.githubusercontent.com/robsonek/aiPanel/main/configs/sources/lock.json"
+		if err := opts.validate(); err != nil {
+			t.Fatalf("expected runtime lock URL to satisfy validation, got %v", err)
 		}
 	})
 
@@ -134,8 +145,9 @@ func TestOptionsValidate(t *testing.T) {
 		opts := DefaultOptions()
 		opts.OnlyStep = "postgresql"
 		opts.RuntimeLockPath = ""
+		opts.RuntimeLockURL = ""
 		err := opts.validate()
-		if err == nil || !strings.Contains(err.Error(), "requires runtime lock path") {
+		if err == nil || !strings.Contains(err.Error(), "requires runtime lock path or runtime lock URL") {
 			t.Fatalf("expected runtime lock requirement for runtime component, got %v", err)
 		}
 	})
@@ -178,6 +190,9 @@ func TestOptionsWithDefaults(t *testing.T) {
 	}
 	if opts.RuntimeLockPath == "" {
 		t.Fatal("expected runtime lock path default to be set")
+	}
+	if opts.RuntimeLockURL == "" {
+		t.Fatal("expected runtime lock URL default to be set")
 	}
 	if opts.RuntimeInstallDir == "" {
 		t.Fatal("expected runtime install dir default to be set")
