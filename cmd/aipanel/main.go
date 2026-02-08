@@ -93,7 +93,7 @@ func printUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "  serve          start panel server (default when no command is provided)")
 	_, _ = fmt.Fprintln(w, "  admin create   create admin user")
 	_, _ = fmt.Fprintln(w, "  install        run installer")
-	_, _ = fmt.Fprintln(w, "  update         rerun all installer steps (ignores checkpoints)")
+	_, _ = fmt.Fprintln(w, "  update         refresh runtime components only when lockfile changed")
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "examples:")
 	_, _ = fmt.Fprintln(w, "  aipanel serve")
@@ -247,6 +247,7 @@ func runInstall(args []string) {
 func runUpdate(args []string) {
 	defaults := installer.DefaultOptions()
 	fs, values := newInstallFlagSet(defaults)
+	reinstallAll := fs.Bool("reinstall-all", false, "force full reinstall of all installer steps (legacy behavior)")
 	if len(args) == 1 && isHelpArg(args[0]) {
 		printUpdateUsage(os.Stdout, fs)
 		return
@@ -264,7 +265,8 @@ func runUpdate(args []string) {
 		fmt.Fprintln(os.Stderr, "--only is not supported with update; use 'aipanel install --only <step>'")
 		os.Exit(2)
 	}
-	opts.ForceAllSteps = true
+	opts.ForceAllSteps = *reinstallAll
+	opts.UpdateChangedOnly = !*reinstallAll
 	runInstaller(opts, dryRun)
 }
 
@@ -385,7 +387,8 @@ func printInstallUsage(w io.Writer, fs *flag.FlagSet) {
 func printUpdateUsage(w io.Writer, fs *flag.FlagSet) {
 	_, _ = fmt.Fprintln(w, "usage: aipanel update [flags]")
 	_, _ = fmt.Fprintln(w)
-	_, _ = fmt.Fprintln(w, "Runs full installer refresh and ignores checkpoint skips.")
+	_, _ = fmt.Fprintln(w, "By default refreshes only runtime components that differ from lockfile metadata.")
+	_, _ = fmt.Fprintln(w, "Use --reinstall-all to force legacy full refresh.")
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "flags:")
 	fs.SetOutput(w)

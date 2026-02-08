@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -430,6 +431,147 @@ func TestEnsureRuntimePostgreSQLBootstrap_ReownsExistingData(t *testing.T) {
 	}
 	if strings.Contains(joined, "runuser -u postgres --") {
 		t.Fatalf("did not expect initdb for existing cluster, got:\n%s", joined)
+	}
+}
+
+func TestRuntimeComponentNeedsUpdate_MetadataMissingRequiresRefresh(t *testing.T) {
+	root := t.TempDir()
+	opts := DefaultOptions()
+	opts.RuntimeInstallDir = filepath.Join(root, "opt", "aipanel", "runtime")
+
+	component := RuntimeComponentLock{
+		Version:      "1.29.5",
+		SourceURL:    "https://example.com/nginx-1.29.5.tar.gz",
+		SourceSHA256: strings.Repeat("a", 64),
+	}
+	versionDir := filepath.Join(opts.RuntimeInstallDir, "nginx", component.Version)
+	if err := os.MkdirAll(versionDir, 0o755); err != nil {
+		t.Fatalf("mkdir version dir: %v", err)
+	}
+	currentLink := filepath.Join(opts.RuntimeInstallDir, "nginx", "current")
+	if err := os.Symlink(versionDir, currentLink); err != nil {
+		t.Fatalf("symlink current: %v", err)
+	}
+
+	ins := New(opts, &fakeRunner{})
+	needsUpdate, reason, err := ins.runtimeComponentNeedsUpdate("nginx", component)
+	if err != nil {
+		t.Fatalf("runtimeComponentNeedsUpdate error: %v", err)
+	}
+	if !needsUpdate {
+		t.Fatal("expected update to be required when metadata file is missing")
+	}
+	if !strings.Contains(reason, "metadata missing") {
+		t.Fatalf("expected metadata-missing reason, got %q", reason)
+	}
+}
+
+func TestRuntimeComponentNeedsUpdate_MetadataMatchSkipsRefresh(t *testing.T) {
+	root := t.TempDir()
+	opts := DefaultOptions()
+	opts.RuntimeInstallDir = filepath.Join(root, "opt", "aipanel", "runtime")
+
+	component := RuntimeComponentLock{
+		Version:      "1.29.5",
+		SourceURL:    "https://example.com/nginx-1.29.5.tar.gz",
+		SourceSHA256: strings.Repeat("a", 64),
+	}
+	versionDir := filepath.Join(opts.RuntimeInstallDir, "nginx", component.Version)
+	if err := os.MkdirAll(versionDir, 0o755); err != nil {
+		t.Fatalf("mkdir version dir: %v", err)
+	}
+	if err := writeRuntimeComponentInstallState(versionDir, "nginx", component); err != nil {
+		t.Fatalf("write runtime component state: %v", err)
+	}
+	currentLink := filepath.Join(opts.RuntimeInstallDir, "nginx", "current")
+	if err := os.Symlink(versionDir, currentLink); err != nil {
+		t.Fatalf("symlink current: %v", err)
+	}
+
+	ins := New(opts, &fakeRunner{})
+	needsUpdate, reason, err := ins.runtimeComponentNeedsUpdate("nginx", component)
+	if err != nil {
+		t.Fatalf("runtimeComponentNeedsUpdate error: %v", err)
+	}
+	if needsUpdate {
+		t.Fatalf("expected no update for matching metadata, got reason %q", reason)
+	}
+}
+
+func TestInstallerRun_UpdateChangedOnly_SkipsWhenRuntimeIsCurrent(t *testing.T) {
+	root := t.TempDir()
+	opts := DefaultOptions()
+	opts.RootFSPath = root
+	opts.StateFilePath = filepath.Join(root, "var", "lib", "aipanel", ".installer-state.json")
+	opts.ReportFilePath = filepath.Join(root, "var", "lib", "aipanel", "install-report.json")
+	opts.LogFilePath = filepath.Join(root, "var", "log", "aipanel", "install.log")
+	opts.RuntimeInstallDir = filepath.Join(root, "opt", "aipanel", "runtime")
+	opts.RuntimeLockURL = ""
+	opts.UpdateChangedOnly = true
+
+	lockPath := filepath.Join(root, "configs", "sources", "lock.json")
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o750); err != nil {
+		t.Fatalf("mkdir lock dir: %v", err)
+	}
+	lockBody := `{
+  "schema_version": 1,
+  "channels": {
+    "stable": {
+      "nginx": {
+        "version": "1.29.5",
+        "source_url": "https://example.com/nginx-1.29.5.tar.gz",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    }
+  }
+}`
+	if err := os.WriteFile(lockPath, []byte(lockBody), 0o600); err != nil {
+		t.Fatalf("write runtime lock: %v", err)
+	}
+	opts.RuntimeLockPath = lockPath
+
+	component := RuntimeComponentLock{
+		Version:      "1.29.5",
+		SourceURL:    "https://example.com/nginx-1.29.5.tar.gz",
+		SourceSHA256: strings.Repeat("a", 64),
+	}
+	versionDir := filepath.Join(opts.RuntimeInstallDir, "nginx", component.Version)
+	if err := os.MkdirAll(versionDir, 0o755); err != nil {
+		t.Fatalf("mkdir version dir: %v", err)
+	}
+	if err := writeRuntimeComponentInstallState(versionDir, "nginx", component); err != nil {
+		t.Fatalf("write runtime component state: %v", err)
+	}
+	if err := os.Symlink(versionDir, filepath.Join(opts.RuntimeInstallDir, "nginx", "current")); err != nil {
+		t.Fatalf("symlink current: %v", err)
+	}
+
+	completed := make(map[string]bool, len(steps.Ordered))
+	for _, stepName := range steps.Ordered {
+		completed[stepName] = true
+	}
+	stateBody, err := json.Marshal(checkpointState{Completed: completed})
+	if err != nil {
+		t.Fatalf("marshal checkpoint state: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(opts.StateFilePath), 0o750); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
+	}
+	if err := os.WriteFile(opts.StateFilePath, stateBody, 0o600); err != nil {
+		t.Fatalf("write state file: %v", err)
+	}
+
+	runner := &fakeRunner{}
+	ins := New(opts, runner)
+	report, err := ins.Run(context.Background())
+	if err != nil {
+		t.Fatalf("installer run failed: %v", err)
+	}
+	if report.Status != "ok" {
+		t.Fatalf("expected report status ok, got %q", report.Status)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("expected no commands when runtime is current, got:\n%s", strings.Join(runner.commands, "\n"))
 	}
 }
 

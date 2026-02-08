@@ -87,6 +87,7 @@ type Options struct {
 	RuntimeInstallDir     string
 	VerifyUpstreamSources bool
 	ForceAllSteps         bool
+	UpdateChangedOnly     bool
 	ReverseProxy          bool
 	PanelDomain           string
 	PHPMyAdminURL         string
@@ -510,6 +511,15 @@ type checkpointState struct {
 	Completed map[string]bool `json:"completed"`
 }
 
+const runtimeComponentStateFile = ".aipanel-component-state.json"
+
+type runtimeComponentInstallState struct {
+	Component    string `json:"component"`
+	Version      string `json:"version"`
+	SourceURL    string `json:"source_url"`
+	SourceSHA256 string `json:"source_sha256"`
+}
+
 type commandLoggingRunner struct {
 	delegate systemd.Runner
 	logf     func(string, ...any)
@@ -699,8 +709,24 @@ func (i *Installer) Run(ctx context.Context) (*Report, error) {
 		{name: steps.Healthcheck, fn: i.runHealthcheck},
 	}
 
-	runErr := error(nil)
 	onlyStep := strings.ToLower(strings.TrimSpace(i.opts.OnlyStep))
+	updateRuntimeComponents := make([]string, 0)
+	if onlyStep == "" && i.opts.UpdateChangedOnly && !i.opts.ForceAllSteps {
+		updateRuntimeComponents, err = i.runtimeComponentsNeedingUpdate(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("resolve runtime update plan: %w", err)
+		}
+		if len(updateRuntimeComponents) == 0 {
+			i.logf("[update] runtime is already up to date for channel %s", i.opts.RuntimeChannel)
+		} else {
+			i.logf(
+				"[update] runtime components requiring refresh: %s",
+				strings.Join(updateRuntimeComponents, ", "),
+			)
+		}
+	}
+
+	runErr := error(nil)
 	if onlyStep != "" {
 		if runtimeComponents, runtimeAlias, parseErr := parseRuntimeOnlyComponents(onlyStep); parseErr != nil {
 			runErr = parseErr
@@ -730,7 +756,37 @@ func (i *Installer) Run(ctx context.Context) (*Report, error) {
 			if runErr != nil {
 				break
 			}
-			runErr = execStep(step.name, step.fn, i.opts.ForceAllSteps)
+			stepName := step.name
+			stepFn := step.fn
+			force := i.opts.ForceAllSteps
+
+			if len(updateRuntimeComponents) > 0 {
+				scope := strings.Join(updateRuntimeComponents, ",")
+				switch step.name {
+				case steps.InstallPkgs:
+					stepName = steps.InstallPkgs + "[" + scope + "]"
+					force = true
+				case steps.InstallRuntime:
+					stepName = steps.InstallRuntime + "[" + scope + "]"
+					stepFn = func(stepCtx context.Context) error {
+						return i.installRuntimeArtifactsSelected(stepCtx, updateRuntimeComponents)
+					}
+					force = true
+				case steps.ActivateRuntime:
+					stepName = steps.ActivateRuntime + "[" + scope + "]"
+					stepFn = func(stepCtx context.Context) error {
+						return i.activateRuntimeServicesSelected(stepCtx, updateRuntimeComponents)
+					}
+					force = true
+				case steps.ConfigurePHP:
+					if stringSliceContains(updateRuntimeComponents, "php-fpm") {
+						stepName = steps.ConfigurePHP + "[php-fpm]"
+						force = true
+					}
+				}
+			}
+
+			runErr = execStep(stepName, stepFn, force)
 		}
 	}
 
@@ -965,6 +1021,9 @@ func (i *Installer) installRuntimeComponentFromSource(
 	if !hasFiles {
 		return fmt.Errorf("runtime build output is empty for %s: %s", componentName, versionDir)
 	}
+	if err := writeRuntimeComponentInstallState(versionDir, componentName, component); err != nil {
+		return fmt.Errorf("write runtime install state for %s: %w", componentName, err)
+	}
 
 	if err := os.Remove(currentLink); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove current runtime symlink for %s: %w", componentName, err)
@@ -1132,6 +1191,122 @@ func selectRuntimeComponents(
 	}
 	sort.Strings(names)
 	return subset, names, nil
+}
+
+func (i *Installer) runtimeComponentsNeedingUpdate(ctx context.Context) ([]string, error) {
+	if !isRuntimeSourceMode(i.opts.InstallMode) {
+		return nil, nil
+	}
+	lock, err := i.resolveRuntimeSourceLock(ctx)
+	if err != nil {
+		return nil, err
+	}
+	channel, err := i.runtimeChannel(lock)
+	if err != nil {
+		return nil, err
+	}
+	componentNames := make([]string, 0, len(channel))
+	for name := range channel {
+		componentNames = append(componentNames, name)
+	}
+	sort.Strings(componentNames)
+
+	updates := make([]string, 0, len(componentNames))
+	for _, componentName := range componentNames {
+		component := channel[componentName]
+		needsUpdate, reason, checkErr := i.runtimeComponentNeedsUpdate(componentName, component)
+		if checkErr != nil {
+			return nil, checkErr
+		}
+		if !needsUpdate {
+			continue
+		}
+		i.logf("[update] runtime component %s requires refresh: %s", componentName, reason)
+		updates = append(updates, componentName)
+	}
+	return updates, nil
+}
+
+func (i *Installer) runtimeComponentNeedsUpdate(
+	componentName string,
+	component RuntimeComponentLock,
+) (bool, string, error) {
+	componentDir := filepath.Join(i.opts.RuntimeInstallDir, componentName)
+	currentLink := filepath.Join(componentDir, "current")
+	currentTarget, err := filepath.EvalSymlinks(currentLink)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return true, "runtime current symlink not found", nil
+		}
+		return false, "", fmt.Errorf("resolve runtime current symlink for %s: %w", componentName, err)
+	}
+
+	expectedVersionDir := filepath.Join(componentDir, component.Version)
+	expectedVersionDirCompare := filepath.Clean(expectedVersionDir)
+	if resolvedExpected, resolveErr := filepath.EvalSymlinks(expectedVersionDir); resolveErr == nil {
+		expectedVersionDirCompare = filepath.Clean(resolvedExpected)
+	} else if !os.IsNotExist(resolveErr) {
+		return false, "", fmt.Errorf("resolve expected runtime version dir for %s: %w", componentName, resolveErr)
+	}
+	if filepath.Clean(currentTarget) != expectedVersionDirCompare {
+		return true, fmt.Sprintf("version changed (current=%s expected=%s)", currentTarget, expectedVersionDir), nil
+	}
+
+	currentState, err := readRuntimeComponentInstallState(expectedVersionDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return true, "runtime install metadata missing", nil
+		}
+		return false, "", fmt.Errorf("read runtime install state for %s: %w", componentName, err)
+	}
+	if strings.TrimSpace(currentState.Component) != "" &&
+		!strings.EqualFold(strings.TrimSpace(currentState.Component), componentName) {
+		return true, "component metadata mismatch", nil
+	}
+	if strings.TrimSpace(currentState.Version) != "" &&
+		strings.TrimSpace(currentState.Version) != strings.TrimSpace(component.Version) {
+		return true, "version metadata mismatch", nil
+	}
+	if !strings.EqualFold(
+		strings.TrimSpace(currentState.SourceSHA256),
+		strings.TrimSpace(component.SourceSHA256),
+	) {
+		return true, "source checksum changed", nil
+	}
+	return false, "", nil
+}
+
+func writeRuntimeComponentInstallState(
+	versionDir string,
+	componentName string,
+	component RuntimeComponentLock,
+) error {
+	state := runtimeComponentInstallState{
+		Component:    strings.TrimSpace(componentName),
+		Version:      strings.TrimSpace(component.Version),
+		SourceURL:    strings.TrimSpace(component.SourceURL),
+		SourceSHA256: strings.ToLower(strings.TrimSpace(component.SourceSHA256)),
+	}
+	body, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeBinaryFile(filepath.Join(versionDir, runtimeComponentStateFile), body, 0o644)
+}
+
+func readRuntimeComponentInstallState(versionDir string) (*runtimeComponentInstallState, error) {
+	statePath := filepath.Join(versionDir, runtimeComponentStateFile)
+	// Installer controls runtime state path.
+	//nolint:gosec // G304
+	body, err := os.ReadFile(statePath)
+	if err != nil {
+		return nil, err
+	}
+	state := &runtimeComponentInstallState{}
+	if err := json.Unmarshal(body, state); err != nil {
+		return nil, fmt.Errorf("decode runtime install state file %s: %w", statePath, err)
+	}
+	return state, nil
 }
 
 var majorMinorVersionPattern = regexp.MustCompile(`^\d+\.\d+`)
@@ -3071,6 +3246,19 @@ func parsePort(addr, fallback string) string {
 		return fallback
 	}
 	return port
+}
+
+func stringSliceContains(values []string, needle string) bool {
+	target := strings.TrimSpace(strings.ToLower(needle))
+	if target == "" {
+		return false
+	}
+	for _, value := range values {
+		if strings.TrimSpace(strings.ToLower(value)) == target {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeWebSubpath(path, fallback string) string {
