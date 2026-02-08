@@ -1355,6 +1355,9 @@ func (i *Installer) ensureRuntimePostgreSQLBootstrap(ctx context.Context) error 
 	runtimeComponentDir := filepath.Join(i.opts.RuntimeInstallDir, "postgresql")
 	runtimeRootDir := filepath.Clean(i.opts.RuntimeInstallDir)
 	runtimeParentDir := filepath.Clean(filepath.Dir(runtimeRootDir))
+	dataRuntimeDir := filepath.Clean(filepath.Dir(dataDir))
+	dataRootDir := filepath.Clean(filepath.Dir(dataRuntimeDir))
+	dataParentDir := filepath.Clean(filepath.Dir(dataDir))
 	versionFile := filepath.Join(dataDir, "PG_VERSION")
 	if _, err := os.Stat(versionFile); err == nil {
 		return nil
@@ -1388,6 +1391,19 @@ func (i *Installer) ensureRuntimePostgreSQLBootstrap(ctx context.Context) error 
 		//nolint:gosec // Runtime tree must be traversable by postgres service user.
 		if err := os.Chmod(dir, 0o755); err != nil {
 			return fmt.Errorf("set runtime directory permissions for %s: %w", dir, err)
+		}
+	}
+	for _, dir := range []string{dataRootDir, dataRuntimeDir, dataParentDir} {
+		if strings.TrimSpace(dir) == "" || dir == "." || dir == string(os.PathSeparator) {
+			continue
+		}
+		//nolint:gosec // PostgreSQL service user must be able to traverse runtime data parents.
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create postgresql data parent directory %s: %w", dir, err)
+		}
+		//nolint:gosec // PostgreSQL service user must be able to traverse runtime data parents.
+		if err := os.Chmod(dir, 0o755); err != nil {
+			return fmt.Errorf("set postgresql data parent permissions for %s: %w", dir, err)
 		}
 	}
 

@@ -303,6 +303,55 @@ func TestEnsureRuntimeNginxConfig_SetsTempDirPermissions(t *testing.T) {
 	}
 }
 
+func TestEnsureRuntimePostgreSQLBootstrap_FixesDataParentPermissions(t *testing.T) {
+	root := t.TempDir()
+	dataRoot := filepath.Join(root, "var", "lib", "aipanel")
+	if err := os.MkdirAll(dataRoot, 0o750); err != nil {
+		t.Fatalf("create data root: %v", err)
+	}
+	if err := os.Chmod(dataRoot, 0o750); err != nil {
+		t.Fatalf("chmod data root: %v", err)
+	}
+
+	runner := &fakeRunner{}
+	opts := DefaultOptions()
+	opts.RootFSPath = root
+	opts.RuntimeInstallDir = filepath.Join(root, "opt", "aipanel", "runtime")
+	opts.DataDir = "/var/lib/aipanel"
+
+	ins := &Installer{
+		opts:   opts,
+		runner: runner,
+		now:    time.Now,
+	}
+	if err := ins.ensureRuntimePostgreSQLBootstrap(context.Background()); err != nil {
+		t.Fatalf("ensureRuntimePostgreSQLBootstrap failed: %v", err)
+	}
+
+	checkDirs := []string{
+		filepath.Join(root, "var", "lib", "aipanel"),
+		filepath.Join(root, "var", "lib", "aipanel", "runtime"),
+	}
+	for _, dir := range checkDirs {
+		info, err := os.Stat(dir)
+		if err != nil {
+			t.Fatalf("stat %s: %v", dir, err)
+		}
+		if info.Mode().Perm() != 0o755 {
+			t.Fatalf("expected %s permissions 0755, got %o", dir, info.Mode().Perm())
+		}
+	}
+
+	dataDir := filepath.Join(root, "var", "lib", "aipanel", "runtime", "postgresql")
+	dataInfo, err := os.Stat(dataDir)
+	if err != nil {
+		t.Fatalf("stat %s: %v", dataDir, err)
+	}
+	if dataInfo.Mode().Perm() != 0o700 {
+		t.Fatalf("expected %s permissions 0700, got %o", dataDir, dataInfo.Mode().Perm())
+	}
+}
+
 func TestInstallPackages_IncludesCertbotWhenLetsEncryptEnabled(t *testing.T) {
 	runner := &fakeRunner{}
 	opts := DefaultOptions()
