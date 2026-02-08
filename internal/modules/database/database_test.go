@@ -110,9 +110,10 @@ func TestService_CreateListDeleteDatabase(t *testing.T) {
 	svc := NewService(store, config.Config{}, slog.Default(), mariadb, postgres)
 
 	res, err := svc.CreateDatabase(ctx, CreateDatabaseRequest{
-		SiteID: 1,
-		DBName: "test_db",
-		Actor:  "admin@example.com",
+		SiteID:   1,
+		DBName:   "test_db",
+		DBEngine: DBEngineMariaDB,
+		Actor:    "admin@example.com",
 	})
 	if err != nil {
 		t.Fatalf("create db: %v", err)
@@ -157,8 +158,9 @@ func TestService_CreateDatabaseRollbackOnCreateUserFailure(t *testing.T) {
 	svc := NewService(store, config.Config{}, slog.Default(), mariadb, postgres)
 
 	_, err := svc.CreateDatabase(ctx, CreateDatabaseRequest{
-		SiteID: 1,
-		DBName: "test_db",
+		SiteID:   1,
+		DBName:   "test_db",
+		DBEngine: DBEngineMariaDB,
 	})
 	if err == nil {
 		t.Fatal("expected create db to fail")
@@ -182,8 +184,9 @@ func TestService_CreateDatabaseNormalizesName(t *testing.T) {
 	svc := NewService(store, config.Config{}, slog.Default(), mariadb, postgres)
 
 	res, err := svc.CreateDatabase(ctx, CreateDatabaseRequest{
-		SiteID: 1,
-		DBName: "fhdfgh.com-prod",
+		SiteID:   1,
+		DBName:   "fhdfgh.com-prod",
+		DBEngine: DBEngineMariaDB,
 	})
 	if err != nil {
 		t.Fatalf("create db: %v", err)

@@ -14,40 +14,32 @@ import (
 )
 
 const (
-	defaultPHPFPMTemplate = "configs/templates/phpfpm_pool.conf.tmpl"
-	defaultPHPBaseDir     = "/etc/php"
-	defaultPHPFPMPoolBody = `[{{ .PoolName }}]
-user = {{ .SystemUser }}
-group = {{ .SystemUser }}
-
-listen = {{ .SocketPath }}
-listen.owner = www-data
-listen.group = www-data
-listen.mode = 0660
-
-pm = ondemand
-pm.max_children = 20
-pm.process_idle_timeout = 10s
-pm.max_requests = 500
-
-chdir = /
-php_admin_value[open_basedir] = {{ .RootDir }}:/tmp
-`
+	defaultPHPFPMTemplate      = "/etc/aipanel/templates/phpfpm_pool.conf.tmpl"
+	defaultPHPFPMPoolDir       = "/opt/aipanel/runtime/php-fpm/current/etc/php-fpm.d"
+	defaultPHPFPMRuntimeDir    = "/opt/aipanel/runtime/php-fpm"
+	defaultPHPFPMServiceName   = "aipanel-runtime-php-fpm.service"
+	phpRuntimeVersionPatternRE = `^\d+\.\d+(?:\.\d+)?$`
 )
 
 var phpVersionPattern = regexp.MustCompile(`^\d+\.\d+$`)
+var phpRuntimeVersionPattern = regexp.MustCompile(phpRuntimeVersionPatternRE)
+var phpMajorMinorPattern = regexp.MustCompile(`^\d+\.\d+`)
 
 // PHPFPMAdapterOptions controls filesystem locations used by the adapter.
 type PHPFPMAdapterOptions struct {
-	TemplatePath string
-	PHPBaseDir   string
+	TemplatePath        string
+	PoolDir             string
+	RuntimeComponentDir string
+	ServiceName         string
 }
 
 // PHPFPMAdapter manages per-site PHP-FPM pools.
 type PHPFPMAdapter struct {
-	runner       systemd.Runner
-	templatePath string
-	phpBaseDir   string
+	runner              systemd.Runner
+	templatePath        string
+	poolDir             string
+	runtimeComponentDir string
+	serviceName         string
 }
 
 // NewPHPFPMAdapter constructs a PHP-FPM adapter with sane defaults.
@@ -58,13 +50,21 @@ func NewPHPFPMAdapter(runner systemd.Runner, opts PHPFPMAdapterOptions) *PHPFPMA
 	if opts.TemplatePath == "" {
 		opts.TemplatePath = defaultPHPFPMTemplate
 	}
-	if opts.PHPBaseDir == "" {
-		opts.PHPBaseDir = defaultPHPBaseDir
+	if opts.PoolDir == "" {
+		opts.PoolDir = defaultPHPFPMPoolDir
+	}
+	if opts.RuntimeComponentDir == "" {
+		opts.RuntimeComponentDir = defaultPHPFPMRuntimeDir
+	}
+	if opts.ServiceName == "" {
+		opts.ServiceName = defaultPHPFPMServiceName
 	}
 	return &PHPFPMAdapter{
-		runner:       runner,
-		templatePath: opts.TemplatePath,
-		phpBaseDir:   opts.PHPBaseDir,
+		runner:              runner,
+		templatePath:        opts.TemplatePath,
+		poolDir:             opts.PoolDir,
+		runtimeComponentDir: opts.RuntimeComponentDir,
+		serviceName:         opts.ServiceName,
 	}
 }
 
@@ -81,7 +81,7 @@ func (a *PHPFPMAdapter) WritePool(_ context.Context, site adapter.SiteConfig) er
 		return fmt.Errorf("system user is required")
 	}
 	pool := poolName(domain, site.PHPVersion)
-	targetDir := filepath.Join(a.phpBaseDir, site.PHPVersion, "fpm", "pool.d")
+	targetDir := a.poolDir
 	targetPath := filepath.Join(targetDir, pool+".conf")
 
 	model := map[string]string{
@@ -92,7 +92,7 @@ func (a *PHPFPMAdapter) WritePool(_ context.Context, site adapter.SiteConfig) er
 		"PoolName":   pool,
 		"SocketPath": socketPath(domain, site.PHPVersion),
 	}
-	content, err := renderTemplateFileWithFallback(a.templatePath, defaultPHPFPMPoolBody, model)
+	content, err := renderTemplateFile(a.templatePath, model)
 	if err != nil {
 		return fmt.Errorf("render php-fpm pool template: %w", err)
 	}
@@ -114,7 +114,7 @@ func (a *PHPFPMAdapter) RemovePool(_ context.Context, domain, phpVersion string)
 	if !phpVersionPattern.MatchString(phpVersion) {
 		return fmt.Errorf("invalid php version")
 	}
-	path := filepath.Join(a.phpBaseDir, phpVersion, "fpm", "pool.d", poolName(domain, phpVersion)+".conf")
+	path := filepath.Join(a.poolDir, poolName(domain, phpVersion)+".conf")
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove php-fpm pool file: %w", err)
 	}
@@ -126,30 +126,35 @@ func (a *PHPFPMAdapter) Restart(ctx context.Context, phpVersion string) error {
 	if !phpVersionPattern.MatchString(phpVersion) {
 		return fmt.Errorf("invalid php version")
 	}
-	if _, err := a.runner.Run(ctx, "systemctl", "restart", "php"+phpVersion+"-fpm"); err != nil {
+	if _, err := a.runner.Run(ctx, "systemctl", "restart", a.serviceName); err != nil {
 		return fmt.Errorf("restart php-fpm %s: %w", phpVersion, err)
 	}
 	return nil
 }
 
-// ListVersions returns installed PHP versions detected under the base directory.
+// ListVersions returns installed PHP major.minor versions detected in runtime component dirs.
 func (a *PHPFPMAdapter) ListVersions(_ context.Context) ([]string, error) {
-	entries, err := os.ReadDir(a.phpBaseDir)
+	entries, err := os.ReadDir(a.runtimeComponentDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("read php base dir: %w", err)
+		return nil, fmt.Errorf("read php runtime dir: %w", err)
 	}
-	versions := make([]string, 0, len(entries))
+	unique := make(map[string]struct{}, len(entries))
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		name := strings.TrimSpace(entry.Name())
+		if !entry.IsDir() || !phpRuntimeVersionPattern.MatchString(name) {
 			continue
 		}
-		v := strings.TrimSpace(entry.Name())
-		if phpVersionPattern.MatchString(v) {
-			versions = append(versions, v)
+		majorMinor := phpMajorMinorPattern.FindString(name)
+		if phpVersionPattern.MatchString(majorMinor) {
+			unique[majorMinor] = struct{}{}
 		}
+	}
+	versions := make([]string, 0, len(unique))
+	for v := range unique {
+		versions = append(versions, v)
 	}
 	slices.Sort(versions)
 	return versions, nil

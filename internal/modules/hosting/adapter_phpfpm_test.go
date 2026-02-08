@@ -17,10 +17,11 @@ func TestPHPFPMAdapter_WritePoolAndRemovePool(t *testing.T) {
 	if err := os.WriteFile(templatePath, []byte("[{{ .PoolName }}]\nlisten = {{ .SocketPath }}\nuser = {{ .SystemUser }}"), 0o600); err != nil {
 		t.Fatalf("write template: %v", err)
 	}
+	poolDir := filepath.Join(root, "pool.d")
 
 	ad := NewPHPFPMAdapter(&fakeRunner{}, PHPFPMAdapterOptions{
 		TemplatePath: templatePath,
-		PHPBaseDir:   root,
+		PoolDir:      poolDir,
 	})
 	site := adapter.SiteConfig{
 		Domain:     "test.example.com",
@@ -32,7 +33,7 @@ func TestPHPFPMAdapter_WritePoolAndRemovePool(t *testing.T) {
 		t.Fatalf("write pool: %v", err)
 	}
 
-	path := filepath.Join(root, "8.3", "fpm", "pool.d", "test-example-com-php83.conf")
+	path := filepath.Join(poolDir, "test-example-com-php83.conf")
 	//nolint:gosec // test reads a file created within temp dir.
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -50,11 +51,12 @@ func TestPHPFPMAdapter_WritePoolAndRemovePool(t *testing.T) {
 	}
 }
 
-func TestPHPFPMAdapter_WritePoolWithFallbackTemplate(t *testing.T) {
+func TestPHPFPMAdapter_WritePoolFailsWithoutTemplate(t *testing.T) {
 	root := t.TempDir()
+	poolDir := filepath.Join(root, "pool.d")
 	ad := NewPHPFPMAdapter(&fakeRunner{}, PHPFPMAdapterOptions{
 		TemplatePath: filepath.Join(root, "missing-template.tmpl"),
-		PHPBaseDir:   root,
+		PoolDir:      poolDir,
 	})
 	site := adapter.SiteConfig{
 		Domain:     "test.example.com",
@@ -62,22 +64,8 @@ func TestPHPFPMAdapter_WritePoolWithFallbackTemplate(t *testing.T) {
 		PHPVersion: "8.3",
 		SystemUser: "site_test_example_com",
 	}
-	if err := ad.WritePool(context.Background(), site); err != nil {
-		t.Fatalf("write pool with fallback template: %v", err)
-	}
-
-	path := filepath.Join(root, "8.3", "fpm", "pool.d", "test-example-com-php83.conf")
-	//nolint:gosec // test reads a file created within temp dir.
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read pool: %v", err)
-	}
-	content := string(b)
-	if !strings.Contains(content, "[test-example-com-php83]") {
-		t.Fatalf("expected fallback template pool name output, got %q", content)
-	}
-	if !strings.Contains(content, "php_admin_value[open_basedir] = /var/www/test.example.com/public_html:/tmp") {
-		t.Fatalf("expected fallback template root dir output, got %q", content)
+	if err := ad.WritePool(context.Background(), site); err == nil {
+		t.Fatal("expected missing template error")
 	}
 }
 
@@ -87,20 +75,20 @@ func TestPHPFPMAdapter_Restart(t *testing.T) {
 	if err := ad.Restart(context.Background(), "8.4"); err != nil {
 		t.Fatalf("restart: %v", err)
 	}
-	if !containsCommand(r.commands, "systemctl restart php8.4-fpm") {
+	if !containsCommand(r.commands, "systemctl restart aipanel-runtime-php-fpm.service") {
 		t.Fatalf("expected restart command, got %v", r.commands)
 	}
 }
 
 func TestPHPFPMAdapter_ListVersions(t *testing.T) {
 	root := t.TempDir()
-	for _, dir := range []string{"8.4", "8.3", "invalid", "bin"} {
+	for _, dir := range []string{"8.4.1", "8.3.27", "invalid", "bin"} {
 		if err := os.MkdirAll(filepath.Join(root, dir), 0o750); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
 		}
 	}
 
-	ad := NewPHPFPMAdapter(&fakeRunner{}, PHPFPMAdapterOptions{PHPBaseDir: root})
+	ad := NewPHPFPMAdapter(&fakeRunner{}, PHPFPMAdapterOptions{RuntimeComponentDir: root})
 	versions, err := ad.ListVersions(context.Background())
 	if err != nil {
 		t.Fatalf("list versions: %v", err)

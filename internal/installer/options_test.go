@@ -37,9 +37,8 @@ func TestOptionsValidate(t *testing.T) {
 		opts := DefaultOptions()
 		opts.InstallMode = InstallModeSourceBuild
 		opts.RuntimeLockPath = ""
-		opts.RuntimeManifestURL = ""
 		err := opts.validate()
-		if err == nil || !strings.Contains(err.Error(), "requires runtime lock path or runtime manifest URL") {
+		if err == nil || !strings.Contains(err.Error(), "requires runtime lock path") {
 			t.Fatalf("expected source-build dependency validation error, got %v", err)
 		}
 	})
@@ -107,7 +106,6 @@ func TestOptionsValidate(t *testing.T) {
 		opts := DefaultOptions()
 		opts.OnlyStep = steps.InstallPHPMyAdmin
 		opts.RuntimeLockPath = ""
-		opts.RuntimeManifestURL = ""
 		opts.RuntimeInstallDir = ""
 		if err := opts.validate(); err != nil {
 			t.Fatalf("expected valid options for only phpmyadmin step, got %v", err)
@@ -118,45 +116,52 @@ func TestOptionsValidate(t *testing.T) {
 		opts := DefaultOptions()
 		opts.OnlyStep = steps.InstallPGAdmin
 		opts.RuntimeLockPath = ""
-		opts.RuntimeManifestURL = ""
 		opts.RuntimeInstallDir = ""
 		if err := opts.validate(); err != nil {
 			t.Fatalf("expected valid options for only pgadmin step, got %v", err)
 		}
 	})
 
-	t.Run("runtime service aliases are valid in only mode", func(t *testing.T) {
+	t.Run("runtime component names are valid in only mode", func(t *testing.T) {
 		opts := DefaultOptions()
-		opts.OnlyStep = "postgresql,mysql,php,nginx"
+		opts.OnlyStep = "postgresql,mysql,php-fpm,nginx,mariadb"
 		if err := opts.validate(); err != nil {
-			t.Fatalf("expected runtime service aliases to be valid, got %v", err)
+			t.Fatalf("expected runtime component names to be valid, got %v", err)
 		}
 	})
 
-	t.Run("runtime service aliases require runtime lock", func(t *testing.T) {
+	t.Run("runtime components require runtime lock", func(t *testing.T) {
 		opts := DefaultOptions()
 		opts.OnlyStep = "postgresql"
 		opts.RuntimeLockPath = ""
-		opts.RuntimeManifestURL = ""
 		err := opts.validate()
-		if err == nil || !strings.Contains(err.Error(), "requires runtime lock path or runtime manifest URL") {
-			t.Fatalf("expected runtime lock requirement for runtime alias, got %v", err)
+		if err == nil || !strings.Contains(err.Error(), "requires runtime lock path") {
+			t.Fatalf("expected runtime lock requirement for runtime component, got %v", err)
 		}
 	})
 
-	t.Run("mysql and mariadb aliases are distinct", func(t *testing.T) {
-		components, runtimeAlias, err := parseRuntimeOnlyComponents("mysql,mariadb")
+	t.Run("mysql and mariadb component names are distinct", func(t *testing.T) {
+		components, runtimeOnly, err := parseRuntimeOnlyComponents("mysql,mariadb")
 		if err != nil {
-			t.Fatalf("expected mysql and mariadb aliases to parse, got %v", err)
+			t.Fatalf("expected mysql and mariadb names to parse, got %v", err)
 		}
-		if !runtimeAlias {
-			t.Fatal("expected runtime alias mode")
+		if !runtimeOnly {
+			t.Fatal("expected runtime component mode")
 		}
 		if len(components) != 2 {
 			t.Fatalf("expected 2 distinct components, got %+v", components)
 		}
 		if components[0] != "mariadb" || components[1] != "mysql" {
 			t.Fatalf("unexpected parsed runtime components: %+v", components)
+		}
+	})
+
+	t.Run("component aliases are rejected", func(t *testing.T) {
+		opts := DefaultOptions()
+		opts.OnlyStep = "php"
+		err := opts.validate()
+		if err == nil || !strings.Contains(err.Error(), "invalid installer step") {
+			t.Fatalf("expected invalid installer step for alias php, got %v", err)
 		}
 	})
 }

@@ -11,17 +11,44 @@ import (
 
 var mariadbNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
 
+const (
+	defaultMariaDBBinaryPath = "/opt/aipanel/runtime/mariadb/current/bin/mariadb"
+	defaultMariaDBService    = "aipanel-runtime-mariadb.service"
+)
+
+// MariaDBAdapterOptions controls runtime command paths used by the adapter.
+type MariaDBAdapterOptions struct {
+	BinaryPath  string
+	ServiceName string
+}
+
 // MariaDBAdapter executes MariaDB commands through system runner.
 type MariaDBAdapter struct {
-	runner systemd.Runner
+	runner      systemd.Runner
+	binaryPath  string
+	serviceName string
 }
 
 // NewMariaDBAdapter creates a MariaDB adapter.
-func NewMariaDBAdapter(runner systemd.Runner) *MariaDBAdapter {
+func NewMariaDBAdapter(runner systemd.Runner, opts ...MariaDBAdapterOptions) *MariaDBAdapter {
 	if runner == nil {
 		runner = systemd.ExecRunner{}
 	}
-	return &MariaDBAdapter{runner: runner}
+	cfg := MariaDBAdapterOptions{}
+	if len(opts) > 0 {
+		cfg = opts[0]
+	}
+	if strings.TrimSpace(cfg.BinaryPath) == "" {
+		cfg.BinaryPath = defaultMariaDBBinaryPath
+	}
+	if strings.TrimSpace(cfg.ServiceName) == "" {
+		cfg.ServiceName = defaultMariaDBService
+	}
+	return &MariaDBAdapter{
+		runner:      runner,
+		binaryPath:  cfg.BinaryPath,
+		serviceName: cfg.ServiceName,
+	}
 }
 
 // CreateDatabase creates a MariaDB database.
@@ -31,7 +58,7 @@ func (a *MariaDBAdapter) CreateDatabase(ctx context.Context, dbName string) erro
 		return fmt.Errorf("invalid database name")
 	}
 	sql := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;", dbName)
-	if _, err := a.runner.Run(ctx, "mariadb", "-e", sql); err != nil {
+	if _, err := a.runner.Run(ctx, a.binaryPath, "-e", sql); err != nil {
 		return fmt.Errorf("create database %s: %w", dbName, err)
 	}
 	return nil
@@ -44,7 +71,7 @@ func (a *MariaDBAdapter) DropDatabase(ctx context.Context, dbName string) error 
 		return fmt.Errorf("invalid database name")
 	}
 	sql := fmt.Sprintf("DROP DATABASE IF EXISTS `%s`;", dbName)
-	if _, err := a.runner.Run(ctx, "mariadb", "-e", sql); err != nil {
+	if _, err := a.runner.Run(ctx, a.binaryPath, "-e", sql); err != nil {
 		return fmt.Errorf("drop database %s: %w", dbName, err)
 	}
 	return nil
@@ -71,7 +98,7 @@ func (a *MariaDBAdapter) CreateUser(ctx context.Context, username, password, dbN
 		fmt.Sprintf("GRANT ALL PRIVILEGES ON `%s`.* TO '%s'@'localhost';", dbName, username),
 		"FLUSH PRIVILEGES;",
 	}, " ")
-	if _, err := a.runner.Run(ctx, "mariadb", "-e", sql); err != nil {
+	if _, err := a.runner.Run(ctx, a.binaryPath, "-e", sql); err != nil {
 		return fmt.Errorf("create user %s: %w", username, err)
 	}
 	return nil
@@ -84,7 +111,7 @@ func (a *MariaDBAdapter) DropUser(ctx context.Context, username string) error {
 		return fmt.Errorf("invalid username")
 	}
 	sql := fmt.Sprintf("DROP USER IF EXISTS '%s'@'localhost'; FLUSH PRIVILEGES;", username)
-	if _, err := a.runner.Run(ctx, "mariadb", "-e", sql); err != nil {
+	if _, err := a.runner.Run(ctx, a.binaryPath, "-e", sql); err != nil {
 		return fmt.Errorf("drop user %s: %w", username, err)
 	}
 	return nil
@@ -92,7 +119,7 @@ func (a *MariaDBAdapter) DropUser(ctx context.Context, username string) error {
 
 // IsRunning reports whether mariadb unit is active.
 func (a *MariaDBAdapter) IsRunning(ctx context.Context) (bool, error) {
-	out, err := a.runner.Run(ctx, "systemctl", "is-active", "mariadb")
+	out, err := a.runner.Run(ctx, "systemctl", "is-active", a.serviceName)
 	if err != nil {
 		trimmed := strings.TrimSpace(strings.ToLower(out + " " + err.Error()))
 		if strings.Contains(trimmed, "inactive") || strings.Contains(trimmed, "failed") || strings.Contains(trimmed, "unknown") {

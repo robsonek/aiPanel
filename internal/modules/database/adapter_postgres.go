@@ -11,17 +11,51 @@ import (
 
 var postgresNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
 
+const (
+	defaultPostgreSQLCommandPath = "/opt/aipanel/runtime/postgresql/current/bin/psql"
+	defaultPostgreSQLService     = "aipanel-runtime-postgresql.service"
+	defaultPostgreSQLUser        = "postgres"
+)
+
+// PostgreSQLAdapterOptions controls runtime command paths used by the adapter.
+type PostgreSQLAdapterOptions struct {
+	CommandPath string
+	ServiceName string
+	RunAsUser   string
+}
+
 // PostgreSQLAdapter executes PostgreSQL commands through system runner.
 type PostgreSQLAdapter struct {
-	runner systemd.Runner
+	runner      systemd.Runner
+	commandPath string
+	serviceName string
+	runAsUser   string
 }
 
 // NewPostgreSQLAdapter creates a PostgreSQL adapter.
-func NewPostgreSQLAdapter(runner systemd.Runner) *PostgreSQLAdapter {
+func NewPostgreSQLAdapter(runner systemd.Runner, opts ...PostgreSQLAdapterOptions) *PostgreSQLAdapter {
 	if runner == nil {
 		runner = systemd.ExecRunner{}
 	}
-	return &PostgreSQLAdapter{runner: runner}
+	cfg := PostgreSQLAdapterOptions{}
+	if len(opts) > 0 {
+		cfg = opts[0]
+	}
+	if strings.TrimSpace(cfg.CommandPath) == "" {
+		cfg.CommandPath = defaultPostgreSQLCommandPath
+	}
+	if strings.TrimSpace(cfg.ServiceName) == "" {
+		cfg.ServiceName = defaultPostgreSQLService
+	}
+	if strings.TrimSpace(cfg.RunAsUser) == "" {
+		cfg.RunAsUser = defaultPostgreSQLUser
+	}
+	return &PostgreSQLAdapter{
+		runner:      runner,
+		commandPath: cfg.CommandPath,
+		serviceName: cfg.ServiceName,
+		runAsUser:   cfg.RunAsUser,
+	}
 }
 
 // CreateDatabase creates a PostgreSQL database.
@@ -106,7 +140,7 @@ func (a *PostgreSQLAdapter) DropUser(ctx context.Context, username string) error
 
 // IsRunning reports whether postgresql unit is active.
 func (a *PostgreSQLAdapter) IsRunning(ctx context.Context) (bool, error) {
-	out, err := a.runner.Run(ctx, "systemctl", "is-active", "postgresql")
+	out, err := a.runner.Run(ctx, "systemctl", "is-active", a.serviceName)
 	if err != nil {
 		trimmed := strings.TrimSpace(strings.ToLower(out + " " + err.Error()))
 		if strings.Contains(trimmed, "inactive") || strings.Contains(trimmed, "failed") || strings.Contains(trimmed, "unknown") {
@@ -119,8 +153,8 @@ func (a *PostgreSQLAdapter) IsRunning(ctx context.Context) (bool, error) {
 
 func (a *PostgreSQLAdapter) runPSQL(ctx context.Context, sql string) error {
 	args := []string{
-		"-u", "postgres", "--",
-		"psql", "-v", "ON_ERROR_STOP=1",
+		"-u", a.runAsUser, "--",
+		a.commandPath, "-v", "ON_ERROR_STOP=1",
 		"-d", "postgres",
 		"-c", sql,
 	}

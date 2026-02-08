@@ -59,7 +59,7 @@ func TestNginxAdapter_WriteVhostAndSymlink(t *testing.T) {
 	}
 }
 
-func TestNginxAdapter_WriteVhostWithFallbackTemplate(t *testing.T) {
+func TestNginxAdapter_WriteVhostFailsWithoutTemplate(t *testing.T) {
 	root := t.TempDir()
 	availDir := filepath.Join(root, "sites-available")
 	enabledDir := filepath.Join(root, "sites-enabled")
@@ -75,22 +75,8 @@ func TestNginxAdapter_WriteVhostWithFallbackTemplate(t *testing.T) {
 		PHPVersion: "8.3",
 		SystemUser: "site_test_example_com",
 	}
-	if err := ad.WriteVhost(context.Background(), site); err != nil {
-		t.Fatalf("write vhost with fallback template: %v", err)
-	}
-
-	confPath := filepath.Join(availDir, "test.example.com.conf")
-	//nolint:gosec // test reads a file created within temp dir.
-	b, err := os.ReadFile(confPath)
-	if err != nil {
-		t.Fatalf("read vhost: %v", err)
-	}
-	content := string(b)
-	if !strings.Contains(content, "server_name test.example.com;") {
-		t.Fatalf("expected fallback template domain output, got %q", content)
-	}
-	if !strings.Contains(content, "fastcgi_pass unix:/run/php/test-example-com-php83.sock;") {
-		t.Fatalf("expected fallback template socket output, got %q", content)
+	if err := ad.WriteVhost(context.Background(), site); err == nil {
+		t.Fatal("expected missing template error")
 	}
 }
 
@@ -139,10 +125,10 @@ func TestNginxAdapter_TestConfigAndReload(t *testing.T) {
 	if err := ad.Reload(context.Background()); err != nil {
 		t.Fatalf("reload: %v", err)
 	}
-	if !containsCommand(r.commands, "nginx -t") {
+	if !containsCommand(r.commands, "/opt/aipanel/runtime/nginx/current/sbin/nginx -t -c /opt/aipanel/runtime/nginx/current/conf/nginx.conf") {
 		t.Fatalf("expected nginx -t command, got %v", r.commands)
 	}
-	if !containsCommand(r.commands, "systemctl reload nginx") {
+	if !containsCommand(r.commands, "systemctl reload aipanel-runtime-nginx.service") {
 		t.Fatalf("expected reload command, got %v", r.commands)
 	}
 }

@@ -51,7 +51,7 @@ func TestMariaDBAdapter_CommandSequence(t *testing.T) {
 	}
 
 	joined := strings.Join(r.commands, "\n")
-	if !strings.Contains(joined, "mariadb -e CREATE DATABASE IF NOT EXISTS `site_db`") {
+	if !strings.Contains(joined, "/opt/aipanel/runtime/mariadb/current/bin/mariadb -e CREATE DATABASE IF NOT EXISTS `site_db`") {
 		t.Fatalf("missing create database command:\n%s", joined)
 	}
 	if !strings.Contains(joined, "GRANT ALL PRIVILEGES ON `site_db`.* TO 'site_user'@'localhost';") {
@@ -65,7 +65,7 @@ func TestMariaDBAdapter_CommandSequence(t *testing.T) {
 func TestMariaDBAdapter_IsRunning(t *testing.T) {
 	r := &fakeRunner{
 		outputs: map[string]string{
-			"systemctl is-active mariadb": "active\n",
+			"systemctl is-active aipanel-runtime-mariadb.service": "active\n",
 		},
 	}
 	ad := NewMariaDBAdapter(r)
@@ -81,10 +81,10 @@ func TestMariaDBAdapter_IsRunning(t *testing.T) {
 func TestMariaDBAdapter_IsRunningInactive(t *testing.T) {
 	r := &fakeRunner{
 		outputs: map[string]string{
-			"systemctl is-active mariadb": "inactive\n",
+			"systemctl is-active aipanel-runtime-mariadb.service": "inactive\n",
 		},
 		errs: map[string]error{
-			"systemctl is-active mariadb": fmt.Errorf("exit status 3"),
+			"systemctl is-active aipanel-runtime-mariadb.service": fmt.Errorf("exit status 3"),
 		},
 	}
 	ad := NewMariaDBAdapter(r)

@@ -25,7 +25,7 @@ func TestPostgreSQLAdapter_CommandSequence(t *testing.T) {
 	}
 
 	joined := strings.Join(r.commands, "\n")
-	if !strings.Contains(joined, "runuser -u postgres -- psql -v ON_ERROR_STOP=1 -d postgres -c CREATE DATABASE \"site_db\";") {
+	if !strings.Contains(joined, "runuser -u postgres -- /opt/aipanel/runtime/postgresql/current/bin/psql -v ON_ERROR_STOP=1 -d postgres -c CREATE DATABASE \"site_db\";") {
 		t.Fatalf("missing create database command:\n%s", joined)
 	}
 	if !strings.Contains(joined, "GRANT ALL PRIVILEGES ON DATABASE \"site_db\" TO \"site_user\";") {
@@ -39,7 +39,7 @@ func TestPostgreSQLAdapter_CommandSequence(t *testing.T) {
 func TestPostgreSQLAdapter_IsRunning(t *testing.T) {
 	r := &fakeRunner{
 		outputs: map[string]string{
-			"systemctl is-active postgresql": "active\n",
+			"systemctl is-active aipanel-runtime-postgresql.service": "active\n",
 		},
 	}
 	ad := NewPostgreSQLAdapter(r)
@@ -55,10 +55,10 @@ func TestPostgreSQLAdapter_IsRunning(t *testing.T) {
 func TestPostgreSQLAdapter_IsRunningInactive(t *testing.T) {
 	r := &fakeRunner{
 		outputs: map[string]string{
-			"systemctl is-active postgresql": "inactive\n",
+			"systemctl is-active aipanel-runtime-postgresql.service": "inactive\n",
 		},
 		errs: map[string]error{
-			"systemctl is-active postgresql": fmt.Errorf("exit status 3"),
+			"systemctl is-active aipanel-runtime-postgresql.service": fmt.Errorf("exit status 3"),
 		},
 	}
 	ad := NewPostgreSQLAdapter(r)

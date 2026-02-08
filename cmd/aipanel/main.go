@@ -254,7 +254,6 @@ type installFlagValues struct {
 	installMode     *string
 	runtimeChannel  *string
 	runtimeLockPath *string
-	runtimeManifest *string
 	runtimeInstall  *string
 	reverseProxy    *bool
 	panelDomain     *string
@@ -283,14 +282,13 @@ func newInstallFlagSet(defaults installer.Options) (*flag.FlagSet, *installFlagV
 		installMode:     fs.String("install-mode", defaults.InstallMode, "runtime install mode: source-build"),
 		runtimeChannel:  fs.String("runtime-channel", defaults.RuntimeChannel, "runtime release channel: stable|edge"),
 		runtimeLockPath: fs.String("runtime-lock-path", defaults.RuntimeLockPath, "runtime source lock file path"),
-		runtimeManifest: fs.String("runtime-manifest-url", defaults.RuntimeManifestURL, "runtime manifest URL (optional)"),
 		runtimeInstall:  fs.String("runtime-install-dir", defaults.RuntimeInstallDir, "runtime install directory for source runtime modes"),
 		reverseProxy:    fs.Bool("reverse-proxy", defaults.ReverseProxy, "bind panel to loopback and expose via nginx reverse proxy"),
 		panelDomain:     fs.String("panel-domain", "", "panel domain for nginx server_name (required with --reverse-proxy)"),
 		letsEncrypt:     fs.Bool("lets-encrypt", defaults.EnableLetsEncrypt, "issue Let's Encrypt certificate for panel domain (requires --reverse-proxy)"),
 		letsEncryptMail: fs.String("lets-encrypt-email", defaults.LetsEncryptEmail, "email for Let's Encrypt registration (required with --lets-encrypt)"),
 		installPGAdmin:  fs.Bool("install-pgadmin", !defaults.SkipPGAdmin, "install pgAdmin (service + nginx route)"),
-		onlyStep:        fs.String("only", "", "run one installer step or runtime service alias (e.g. install_phpmyadmin, install_pgadmin, postgresql, mysql, php, nginx)"),
+		onlyStep:        fs.String("only", "", "run one installer step or runtime component name (e.g. install_phpmyadmin, install_pgadmin, postgresql, mariadb, php-fpm, nginx)"),
 		skipHealthcheck: fs.Bool("skip-healthcheck", false, "skip final /health check"),
 		dryRun:          fs.Bool("dry-run", false, "do not execute system commands"),
 	}
@@ -313,7 +311,6 @@ func (v *installFlagValues) toOptions(defaults installer.Options) (installer.Opt
 	opts.InstallMode = strings.TrimSpace(*v.installMode)
 	opts.RuntimeChannel = strings.TrimSpace(*v.runtimeChannel)
 	opts.RuntimeLockPath = strings.TrimSpace(*v.runtimeLockPath)
-	opts.RuntimeManifestURL = strings.TrimSpace(*v.runtimeManifest)
 	opts.RuntimeInstallDir = strings.TrimSpace(*v.runtimeInstall)
 	opts.OnlyStep = strings.ToLower(strings.TrimSpace(*v.onlyStep))
 	opts.SkipPGAdmin = !*v.installPGAdmin

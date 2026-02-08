@@ -229,9 +229,6 @@ func TestPromptInstallOptions_CustomMode(t *testing.T) {
 	if opts.RuntimeChannel != "edge" {
 		t.Fatalf("runtime channel mismatch: got %q", opts.RuntimeChannel)
 	}
-	if opts.RuntimeManifestURL != defaults.RuntimeManifestURL {
-		t.Fatalf("runtime manifest should stay default, got %q", opts.RuntimeManifestURL)
-	}
 	if !opts.ReverseProxy {
 		t.Fatal("expected reverse proxy enabled")
 	}

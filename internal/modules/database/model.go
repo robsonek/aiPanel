@@ -16,7 +16,7 @@ type SiteDatabase struct {
 type CreateDatabaseRequest struct {
 	SiteID   int64  `json:"site_id"`
 	DBName   string `json:"db_name"`
-	DBEngine string `json:"db_engine,omitempty"`
+	DBEngine string `json:"db_engine"`
 	Actor    string `json:"-"`
 }
 

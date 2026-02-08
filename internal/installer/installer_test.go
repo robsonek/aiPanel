@@ -155,7 +155,6 @@ func TestInstallerRun_Phase1DrySystem(t *testing.T) {
 	opts.RootFSPath = root
 	opts.NginxSitesAvailableDir = filepath.Join(root, "etc", "nginx", "sites-available")
 	opts.NginxSitesEnabledDir = filepath.Join(root, "etc", "nginx", "sites-enabled")
-	opts.PHPBaseDir = filepath.Join(root, "etc", "php")
 	opts.PanelVhostTemplatePath = filepath.Join(root, "configs", "templates", "nginx_panel_vhost.conf.tmpl")
 	opts.CatchAllTemplatePath = filepath.Join(root, "configs", "templates", "nginx_catchall.conf.tmpl")
 	opts.AdminEmail = "admin@example.com"
@@ -337,7 +336,6 @@ func TestConfigureTLS_IssuesCertificateAndWritesRenewHook(t *testing.T) {
 	opts.RuntimeInstallDir = filepath.Join(root, "opt", "aipanel", "runtime")
 	opts.NginxSitesAvailableDir = filepath.Join(root, "etc", "nginx", "sites-available")
 	opts.NginxSitesEnabledDir = filepath.Join(root, "etc", "nginx", "sites-enabled")
-	opts.PHPBaseDir = filepath.Join(root, "etc", "php")
 	opts.PanelVhostTemplatePath = filepath.Join(root, "configs", "templates", "nginx_panel_vhost.conf.tmpl")
 	opts.CatchAllTemplatePath = filepath.Join(root, "configs", "templates", "nginx_catchall.conf.tmpl")
 
@@ -514,7 +512,6 @@ func TestInstallerRun_SourceBuildCompilesRuntime(t *testing.T) {
 	opts.RootFSPath = root
 	opts.NginxSitesAvailableDir = filepath.Join(root, "etc", "nginx", "sites-available")
 	opts.NginxSitesEnabledDir = filepath.Join(root, "etc", "nginx", "sites-enabled")
-	opts.PHPBaseDir = filepath.Join(root, "etc", "php")
 	opts.PanelVhostTemplatePath = filepath.Join(root, "configs", "templates", "nginx_panel_vhost.conf.tmpl")
 	opts.CatchAllTemplatePath = filepath.Join(root, "configs", "templates", "nginx_catchall.conf.tmpl")
 	opts.AdminEmail = "admin@example.com"
@@ -565,7 +562,7 @@ func TestInstallerRun_SourceBuildCompilesRuntime(t *testing.T) {
 	}
 }
 
-func TestInstallerRun_OnlyRuntimeServiceAliasInstallsSelectedComponent(t *testing.T) {
+func TestInstallerRun_OnlyRuntimeComponentsInstallsSelectedComponent(t *testing.T) {
 	root := t.TempDir()
 
 	nginxTar := filepath.Join(root, "runtime", "nginx-source.tar.gz")
@@ -668,7 +665,7 @@ func TestInstallerRun_OnlyRuntimeServiceAliasInstallsSelectedComponent(t *testin
 		t.Fatalf("expected report status ok, got %q", report.Status)
 	}
 	if len(report.Steps) != 3 {
-		t.Fatalf("expected three runtime alias steps, got %d", len(report.Steps))
+		t.Fatalf("expected three runtime component steps, got %d", len(report.Steps))
 	}
 	if report.Steps[0].Name != steps.InstallPkgs+"[postgresql]" {
 		t.Fatalf("expected first alias step %s, got %s", steps.InstallPkgs+"[postgresql]", report.Steps[0].Name)
@@ -686,6 +683,9 @@ func TestInstallerRun_OnlyRuntimeServiceAliasInstallsSelectedComponent(t *testin
 	joined := strings.Join(runner.commands, "\n")
 	if !strings.Contains(joined, "systemctl enable --now aipanel-runtime-postgresql.service") {
 		t.Fatalf("expected enable postgresql runtime unit, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "systemctl restart aipanel-runtime-postgresql.service") {
+		t.Fatalf("expected restart postgresql runtime unit, got:\n%s", joined)
 	}
 	if strings.Contains(joined, "aipanel-runtime-nginx.service") {
 		t.Fatalf("did not expect nginx runtime activation in postgresql-only mode, got:\n%s", joined)

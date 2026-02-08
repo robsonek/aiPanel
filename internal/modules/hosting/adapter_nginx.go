@@ -13,29 +13,12 @@ import (
 )
 
 const (
-	defaultNginxVhostTemplate  = "configs/templates/nginx_vhost.conf.tmpl"
+	defaultNginxVhostTemplate  = "/etc/aipanel/templates/nginx_vhost.conf.tmpl"
 	defaultNginxSitesAvailDir  = "/etc/nginx/sites-available"
 	defaultNginxSitesEnableDir = "/etc/nginx/sites-enabled"
-	defaultNginxVhostBody      = `server {
-    listen 80;
-    server_name {{ .Domain }};
-
-    root {{ .RootDir }};
-    index index.php index.html index.htm;
-
-    access_log /var/log/nginx/{{ .Domain }}.access.log;
-    error_log /var/log/nginx/{{ .Domain }}.error.log;
-
-    location / {
-        try_files $uri $uri/ /index.php?$query_string;
-    }
-
-    location ~ \.php$ {
-        include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:{{ .SocketPath }};
-    }
-}
-`
+	defaultNginxBinaryPath     = "/opt/aipanel/runtime/nginx/current/sbin/nginx"
+	defaultNginxConfigPath     = "/opt/aipanel/runtime/nginx/current/conf/nginx.conf"
+	defaultNginxServiceName    = "aipanel-runtime-nginx.service"
 )
 
 // NginxAdapterOptions controls filesystem locations used by the adapter.
@@ -43,6 +26,9 @@ type NginxAdapterOptions struct {
 	TemplatePath      string
 	SitesAvailableDir string
 	SitesEnabledDir   string
+	NginxBinaryPath   string
+	NginxConfigPath   string
+	ServiceName       string
 }
 
 // NginxAdapter manages per-site Nginx vhost files.
@@ -51,6 +37,9 @@ type NginxAdapter struct {
 	templatePath      string
 	sitesAvailableDir string
 	sitesEnabledDir   string
+	nginxBinaryPath   string
+	nginxConfigPath   string
+	serviceName       string
 }
 
 // NewNginxAdapter constructs a Nginx adapter with sane defaults.
@@ -67,11 +56,23 @@ func NewNginxAdapter(runner systemd.Runner, opts NginxAdapterOptions) *NginxAdap
 	if opts.SitesEnabledDir == "" {
 		opts.SitesEnabledDir = defaultNginxSitesEnableDir
 	}
+	if opts.NginxBinaryPath == "" {
+		opts.NginxBinaryPath = defaultNginxBinaryPath
+	}
+	if opts.NginxConfigPath == "" {
+		opts.NginxConfigPath = defaultNginxConfigPath
+	}
+	if opts.ServiceName == "" {
+		opts.ServiceName = defaultNginxServiceName
+	}
 	return &NginxAdapter{
 		runner:            runner,
 		templatePath:      opts.TemplatePath,
 		sitesAvailableDir: opts.SitesAvailableDir,
 		sitesEnabledDir:   opts.SitesEnabledDir,
+		nginxBinaryPath:   opts.NginxBinaryPath,
+		nginxConfigPath:   opts.NginxConfigPath,
+		serviceName:       opts.ServiceName,
 	}
 }
 
@@ -92,7 +93,7 @@ func (a *NginxAdapter) WriteVhost(_ context.Context, site adapter.SiteConfig) er
 		"SocketPath": socketPath(domain, site.PHPVersion),
 	}
 
-	content, err := renderTemplateFileWithFallback(a.templatePath, defaultNginxVhostBody, model)
+	content, err := renderTemplateFile(a.templatePath, model)
 	if err != nil {
 		return fmt.Errorf("render nginx vhost template: %w", err)
 	}
@@ -137,27 +138,24 @@ func (a *NginxAdapter) RemoveVhost(_ context.Context, domain string) error {
 
 // TestConfig runs "nginx -t".
 func (a *NginxAdapter) TestConfig(ctx context.Context) error {
-	if _, err := a.runner.Run(ctx, "nginx", "-t"); err != nil {
+	if _, err := a.runner.Run(ctx, a.nginxBinaryPath, "-t", "-c", a.nginxConfigPath); err != nil {
 		return fmt.Errorf("nginx config test failed: %w", err)
 	}
 	return nil
 }
 
-// Reload runs "systemctl reload nginx".
+// Reload reloads the configured Nginx systemd service.
 func (a *NginxAdapter) Reload(ctx context.Context) error {
-	if _, err := a.runner.Run(ctx, "systemctl", "reload", "nginx"); err != nil {
+	if _, err := a.runner.Run(ctx, "systemctl", "reload", a.serviceName); err != nil {
 		return fmt.Errorf("nginx reload failed: %w", err)
 	}
 	return nil
 }
 
-func renderTemplateFileWithFallback(path, fallback string, data any) (string, error) {
+func renderTemplateFile(path string, data any) (string, error) {
 	source, err := os.ReadFile(path) //nolint:gosec // Adapter reads installer-controlled template paths.
 	if err != nil {
-		if !os.IsNotExist(err) {
-			return "", err
-		}
-		source = []byte(fallback)
+		return "", err
 	}
 	tpl, err := template.New(filepath.Base(path)).Parse(string(source))
 	if err != nil {

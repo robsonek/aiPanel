@@ -332,7 +332,7 @@ func mapRowToDatabase(row map[string]any) (SiteDatabase, error) {
 	dbUser, _ := row["db_user"].(string)
 	dbEngine, _ := row["db_engine"].(string)
 	if strings.TrimSpace(dbEngine) == "" {
-		dbEngine = DBEngineMariaDB
+		return SiteDatabase{}, fmt.Errorf("invalid database engine")
 	}
 	return SiteDatabase{
 		ID:        id,
@@ -368,7 +368,7 @@ func dbUserForName(engine, dbName string) string {
 func normalizeDatabaseEngine(raw string) (string, error) {
 	engine := strings.ToLower(strings.TrimSpace(raw))
 	if engine == "" {
-		return DBEngineMariaDB, nil
+		return "", fmt.Errorf("invalid database engine")
 	}
 	switch engine {
 	case DBEngineMariaDB, DBEnginePostgreSQL:
