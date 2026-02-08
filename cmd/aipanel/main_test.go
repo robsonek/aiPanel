@@ -197,14 +197,14 @@ func TestPromptInstallOptions_CustomMode(t *testing.T) {
 	input := strings.Join([]string{
 		"n",
 		":18080",
-		"ops@example.com",
+		"ops@aipanel.dev",
 		"VeryStrongPass123!",
 		"edge",
 		"y",
 		"y",
 		"panel.example.com",
 		"y",
-		"tls-admin@example.com",
+		"tls-admin@aipanel.dev",
 		"n",
 		"y",
 	}, "\n") + "\n"
@@ -220,7 +220,7 @@ func TestPromptInstallOptions_CustomMode(t *testing.T) {
 	if opts.Addr != "127.0.0.1:18080" {
 		t.Fatalf("addr mismatch: got %q", opts.Addr)
 	}
-	if opts.AdminEmail != "ops@example.com" {
+	if opts.AdminEmail != "ops@aipanel.dev" {
 		t.Fatalf("admin email mismatch: got %q", opts.AdminEmail)
 	}
 	if opts.AdminPassword != "VeryStrongPass123!" {
@@ -238,7 +238,7 @@ func TestPromptInstallOptions_CustomMode(t *testing.T) {
 	if !opts.EnableLetsEncrypt {
 		t.Fatal("expected letsencrypt enabled")
 	}
-	if opts.LetsEncryptEmail != "tls-admin@example.com" {
+	if opts.LetsEncryptEmail != "tls-admin@aipanel.dev" {
 		t.Fatalf("letsencrypt email mismatch: got %q", opts.LetsEncryptEmail)
 	}
 }
@@ -248,7 +248,7 @@ func TestPromptInstallOptions_CustomModeRePromptsShortPassword(t *testing.T) {
 	input := strings.Join([]string{
 		"n",
 		":18080",
-		"ops@example.com",
+		"ops@aipanel.dev",
 		"short",
 		"VeryStrongPass123!",
 		"stable",
@@ -271,6 +271,38 @@ func TestPromptInstallOptions_CustomModeRePromptsShortPassword(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "admin password must be at least") {
 		t.Fatalf("expected validation message in output, got: %q", out.String())
+	}
+}
+
+func TestPromptInstallOptions_RePromptsInvalidLetsEncryptEmail(t *testing.T) {
+	defaults := installer.DefaultOptions()
+	input := strings.Join([]string{
+		"y",
+		"y",
+		"aipanel.onee.my",
+		"y",
+		"",
+		"admin@example.com",
+		"ops@aipanel.dev",
+		"y",
+	}, "\n") + "\n"
+	out := &bytes.Buffer{}
+
+	opts, dryRun, err := promptInstallOptions(defaults, strings.NewReader(input), out)
+	if err != nil {
+		t.Fatalf("promptInstallOptions error: %v", err)
+	}
+	if dryRun {
+		t.Fatal("expected dryRun=false")
+	}
+	if opts.LetsEncryptEmail != "ops@aipanel.dev" {
+		t.Fatalf("letsencrypt email mismatch: got %q", opts.LetsEncryptEmail)
+	}
+	if !strings.Contains(strings.ToLower(out.String()), "letsencrypt email is required") {
+		t.Fatalf("expected empty email validation message in output, got: %q", out.String())
+	}
+	if !strings.Contains(strings.ToLower(out.String()), "placeholder domain") {
+		t.Fatalf("expected placeholder email validation message in output, got: %q", out.String())
 	}
 }
 
@@ -347,7 +379,7 @@ func TestInstallFlagValuesToOptions_LetsEncrypt(t *testing.T) {
 		"--reverse-proxy",
 		"--panel-domain", "panel.example.com",
 		"--lets-encrypt",
-		"--lets-encrypt-email", "ops@example.com",
+		"--lets-encrypt-email", "ops@aipanel.dev",
 	}
 	if err := fs.Parse(args); err != nil {
 		t.Fatalf("parse flags: %v", err)
@@ -359,7 +391,7 @@ func TestInstallFlagValuesToOptions_LetsEncrypt(t *testing.T) {
 	if !opts.EnableLetsEncrypt {
 		t.Fatal("expected letsencrypt enabled")
 	}
-	if opts.LetsEncryptEmail != "ops@example.com" {
+	if opts.LetsEncryptEmail != "ops@aipanel.dev" {
 		t.Fatalf("letsencrypt email mismatch: got %q", opts.LetsEncryptEmail)
 	}
 }
@@ -369,7 +401,7 @@ func TestInstallFlagValuesToOptions_LetsEncryptRequiresReverseProxy(t *testing.T
 	fs, values := newInstallFlagSet(defaults)
 	args := []string{
 		"--lets-encrypt",
-		"--lets-encrypt-email", "ops@example.com",
+		"--lets-encrypt-email", "ops@aipanel.dev",
 	}
 	if err := fs.Parse(args); err != nil {
 		t.Fatalf("parse flags: %v", err)
@@ -394,6 +426,24 @@ func TestInstallFlagValuesToOptions_LetsEncryptRequiresEmail(t *testing.T) {
 	_, _, err := values.toOptions(defaults)
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "letsencrypt email is required") {
 		t.Fatalf("expected letsencrypt email validation error, got %v", err)
+	}
+}
+
+func TestInstallFlagValuesToOptions_LetsEncryptRejectsPlaceholderEmail(t *testing.T) {
+	defaults := installer.DefaultOptions()
+	fs, values := newInstallFlagSet(defaults)
+	args := []string{
+		"--reverse-proxy",
+		"--panel-domain", "panel.example.com",
+		"--lets-encrypt",
+		"--lets-encrypt-email", "admin@example.com",
+	}
+	if err := fs.Parse(args); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+	_, _, err := values.toOptions(defaults)
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "placeholder domain") {
+		t.Fatalf("expected placeholder email validation error, got %v", err)
 	}
 }
 

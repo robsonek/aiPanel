@@ -67,7 +67,7 @@ func TestOptionsValidate(t *testing.T) {
 	t.Run("letsencrypt requires reverse proxy", func(t *testing.T) {
 		opts := DefaultOptions()
 		opts.EnableLetsEncrypt = true
-		opts.LetsEncryptEmail = "ops@example.com"
+		opts.LetsEncryptEmail = "ops@aipanel.dev"
 		err := opts.validate()
 		if err == nil || !strings.Contains(strings.ToLower(err.Error()), "letsencrypt requires reverse proxy") {
 			t.Fatalf("expected letsencrypt reverse proxy validation error, got %v", err)
@@ -83,6 +83,30 @@ func TestOptionsValidate(t *testing.T) {
 		err := opts.validate()
 		if err == nil || !strings.Contains(strings.ToLower(err.Error()), "letsencrypt email is required") {
 			t.Fatalf("expected letsencrypt email validation error, got %v", err)
+		}
+	})
+
+	t.Run("letsencrypt rejects placeholder email domain", func(t *testing.T) {
+		opts := DefaultOptions()
+		opts.ReverseProxy = true
+		opts.PanelDomain = "panel.example.com"
+		opts.EnableLetsEncrypt = true
+		opts.LetsEncryptEmail = "admin@example.com"
+		err := opts.validate()
+		if err == nil || !strings.Contains(strings.ToLower(err.Error()), "placeholder domain") {
+			t.Fatalf("expected placeholder email validation error, got %v", err)
+		}
+	})
+
+	t.Run("letsencrypt rejects malformed email", func(t *testing.T) {
+		opts := DefaultOptions()
+		opts.ReverseProxy = true
+		opts.PanelDomain = "panel.example.com"
+		opts.EnableLetsEncrypt = true
+		opts.LetsEncryptEmail = "invalid-email"
+		err := opts.validate()
+		if err == nil || !strings.Contains(strings.ToLower(err.Error()), "invalid letsencrypt email") {
+			t.Fatalf("expected malformed email validation error, got %v", err)
 		}
 	})
 

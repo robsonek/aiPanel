@@ -359,8 +359,10 @@ func (v *installFlagValues) toOptions(defaults installer.Options) (installer.Opt
 	if opts.EnableLetsEncrypt && !opts.ReverseProxy {
 		return installer.Options{}, false, fmt.Errorf("letsencrypt requires --reverse-proxy")
 	}
-	if opts.EnableLetsEncrypt && opts.LetsEncryptEmail == "" {
-		return installer.Options{}, false, fmt.Errorf("letsencrypt email is required with --lets-encrypt")
+	if opts.EnableLetsEncrypt {
+		if err := installer.ValidateLetsEncryptEmail(opts.LetsEncryptEmail); err != nil {
+			return installer.Options{}, false, err
+		}
 	}
 	if err := validateAdminPassword(opts.AdminPassword); err != nil {
 		return installer.Options{}, false, err
@@ -449,7 +451,17 @@ func promptInstallOptions(defaults installer.Options, in io.Reader, out io.Write
 			return installer.Options{}, false, err
 		}
 		if enableLetsEncrypt {
-			if letsEncryptEmail, err = promptString(reader, out, "Let's Encrypt email", opts.AdminEmail, nonEmptyValidator("letsencrypt email")); err != nil {
+			defaultLetsEncryptEmail := strings.TrimSpace(opts.AdminEmail)
+			if installer.ValidateLetsEncryptEmail(defaultLetsEncryptEmail) != nil {
+				defaultLetsEncryptEmail = ""
+			}
+			if letsEncryptEmail, err = promptString(
+				reader,
+				out,
+				"Let's Encrypt email",
+				defaultLetsEncryptEmail,
+				letsEncryptEmailValidator(),
+			); err != nil {
 				return installer.Options{}, false, err
 			}
 		}
@@ -521,6 +533,12 @@ func nonEmptyValidator(field string) promptValidator {
 func adminPasswordValidator() promptValidator {
 	return func(value string) error {
 		return validateAdminPassword(value)
+	}
+}
+
+func letsEncryptEmailValidator() promptValidator {
+	return func(value string) error {
+		return installer.ValidateLetsEncryptEmail(value)
 	}
 }
 

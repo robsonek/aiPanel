@@ -17,6 +17,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/mail"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -407,8 +408,8 @@ func (o Options) validate() error {
 		if panelDomain == "" || panelDomain == "_" {
 			return fmt.Errorf("panel domain is required when letsencrypt is enabled")
 		}
-		if strings.TrimSpace(o.LetsEncryptEmail) == "" {
-			return fmt.Errorf("letsencrypt email is required when letsencrypt is enabled")
+		if err := ValidateLetsEncryptEmail(o.LetsEncryptEmail); err != nil {
+			return err
 		}
 	}
 	if only := strings.TrimSpace(o.OnlyStep); only != "" {
@@ -417,6 +418,30 @@ func (o Options) validate() error {
 				return fmt.Errorf("invalid installer step for --only: %s", o.OnlyStep)
 			}
 		}
+	}
+	return nil
+}
+
+// ValidateLetsEncryptEmail validates ACME registration email address.
+func ValidateLetsEncryptEmail(raw string) error {
+	email := strings.TrimSpace(raw)
+	if email == "" {
+		return fmt.Errorf("letsencrypt email is required when letsencrypt is enabled")
+	}
+	addr, err := mail.ParseAddress(email)
+	if err != nil || strings.TrimSpace(addr.Address) == "" {
+		return fmt.Errorf("invalid letsencrypt email %q", email)
+	}
+	if !strings.EqualFold(strings.TrimSpace(addr.Address), email) {
+		return fmt.Errorf("invalid letsencrypt email %q", email)
+	}
+	parts := strings.SplitN(strings.ToLower(strings.TrimSpace(addr.Address)), "@", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return fmt.Errorf("invalid letsencrypt email %q", email)
+	}
+	switch parts[1] {
+	case "example.com", "example.org", "example.net":
+		return fmt.Errorf("letsencrypt email uses placeholder domain %q; provide a real mailbox", parts[1])
 	}
 	return nil
 }
@@ -2420,8 +2445,8 @@ func (i *Installer) configureTLS(ctx context.Context) error {
 		return fmt.Errorf("panel domain is required when letsencrypt is enabled")
 	}
 	email := strings.TrimSpace(i.opts.LetsEncryptEmail)
-	if email == "" {
-		return fmt.Errorf("letsencrypt email is required when letsencrypt is enabled")
+	if err := ValidateLetsEncryptEmail(email); err != nil {
+		return err
 	}
 	if err := i.ensureCertbotInstalled(ctx); err != nil {
 		return err

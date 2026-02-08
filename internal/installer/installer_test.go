@@ -603,7 +603,7 @@ func TestConfigureTLS_IssuesCertificateAndWritesRenewHook(t *testing.T) {
 	opts.ReverseProxy = true
 	opts.PanelDomain = "panel.example.com"
 	opts.EnableLetsEncrypt = true
-	opts.LetsEncryptEmail = "ops@example.com"
+	opts.LetsEncryptEmail = "ops@aipanel.dev"
 	opts.RuntimeInstallDir = filepath.Join(root, "opt", "aipanel", "runtime")
 	opts.NginxSitesAvailableDir = filepath.Join(root, "etc", "nginx", "sites-available")
 	opts.NginxSitesEnabledDir = filepath.Join(root, "etc", "nginx", "sites-enabled")
@@ -620,7 +620,7 @@ func TestConfigureTLS_IssuesCertificateAndWritesRenewHook(t *testing.T) {
 	}
 
 	joined := strings.Join(runner.commands, "\n")
-	if !strings.Contains(joined, "certbot certonly --webroot --webroot-path /var/www/letsencrypt --domain panel.example.com --email ops@example.com --agree-tos --non-interactive --keep-until-expiring") {
+	if !strings.Contains(joined, "certbot certonly --webroot --webroot-path /var/www/letsencrypt --domain panel.example.com --email ops@aipanel.dev --agree-tos --non-interactive --keep-until-expiring") {
 		t.Fatalf("expected certbot command, got:\n%s", joined)
 	}
 	if !strings.Contains(joined, "nginx -t") {
@@ -629,6 +629,28 @@ func TestConfigureTLS_IssuesCertificateAndWritesRenewHook(t *testing.T) {
 	hookPath := filepath.Join(root, "etc", "letsencrypt", "renewal-hooks", "deploy", "aipanel-reload-nginx.sh")
 	if _, err := os.Stat(hookPath); err != nil {
 		t.Fatalf("expected letsencrypt hook file, got %v", err)
+	}
+}
+
+func TestConfigureTLS_RejectsPlaceholderEmail(t *testing.T) {
+	runner := &fakeRunner{}
+	opts := DefaultOptions()
+	opts.ReverseProxy = true
+	opts.PanelDomain = "panel.example.com"
+	opts.EnableLetsEncrypt = true
+	opts.LetsEncryptEmail = "admin@example.com"
+
+	ins := &Installer{
+		opts:   opts,
+		runner: runner,
+		now:    time.Now,
+	}
+	err := ins.configureTLS(context.Background())
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "placeholder domain") {
+		t.Fatalf("expected placeholder email error, got %v", err)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("expected no commands for invalid email, got:\n%s", strings.Join(runner.commands, "\n"))
 	}
 }
 
