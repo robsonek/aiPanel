@@ -43,9 +43,9 @@ const (
 	defaultPHPMyAdminURL        = "https://files.phpmyadmin.net/phpMyAdmin/5.2.3/phpMyAdmin-5.2.3-all-languages.tar.gz"
 	defaultPHPMyAdminSHA256URL  = "https://files.phpmyadmin.net/phpMyAdmin/5.2.3/phpMyAdmin-5.2.3-all-languages.tar.gz.sha256"
 	defaultPHPMyAdminInstallDir = "/usr/share/phpmyadmin"
-	defaultPGAdminURL           = "https://ftp.postgresql.org/pub/pgadmin/pgadmin4/v9.12/source/pgadmin4-9.12.tar.gz"
-	defaultPGAdminSHA256        = "f72f5d688eed9f65d523046492ce868bcb4251c04f763cb6b834b13be0ad6744"
-	defaultPGAdminSignatureURL  = "https://ftp.postgresql.org/pub/pgadmin/pgadmin4/v9.12/source/pgadmin4-9.12.tar.gz.asc"
+	defaultPGAdminURL           = "https://ftp.postgresql.org/pub/pgadmin/pgadmin4/v9.12/pip/pgadmin4-9.12-py3-none-any.whl"
+	defaultPGAdminSHA256        = "99936db81877edeaa3324fb678d87314ffd598872ea13d24c48d1dbf34eb2389"
+	defaultPGAdminSignatureURL  = "https://ftp.postgresql.org/pub/pgadmin/pgadmin4/v9.12/pip/pgadmin4-9.12-py3-none-any.whl.asc"
 	defaultPGAdminFingerprint   = "E8697E2EEF76C02D3A6332778881B2A8210976F2"
 	defaultPGAdminInstallDir    = "/var/lib/aipanel/pgadmin4"
 	defaultPGAdminVenvDir       = "/var/lib/aipanel/pgadmin4-venv"
@@ -2094,13 +2094,13 @@ func (i *Installer) initDatabases(ctx context.Context) error {
 }
 
 type panelVhostTemplateData struct {
-	PanelPort   string
-	PanelHost   string
-	PHPVersion  string
-	ACMEWebroot string
-	EnableTLS   bool
-	TLSCertPath string
-	TLSKeyPath  string
+	PanelPort     string
+	PanelHost     string
+	PHPVersion    string
+	ACMEWebroot   string
+	EnableTLS     bool
+	TLSCertPath   string
+	TLSKeyPath    string
 	EnablePGAdmin bool
 	PGAdminPath   string
 	PGAdminPort   string
@@ -2471,67 +2471,6 @@ func (i *Installer) installPGAdmin(ctx context.Context) error {
 	venvDir := pathInRootFS(i.opts.RootFSPath, i.opts.PGAdminVenvDir)
 	dataDir := pathInRootFS(i.opts.RootFSPath, i.opts.PGAdminDataDir)
 
-	entrypoint := filepath.Join(installDir, "web", "pgAdmin4.py")
-	if _, err := os.Stat(entrypoint); err == nil {
-		i.logf("[install_pgadmin] existing installation detected at %s, keeping source tree", installDir)
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("inspect pgAdmin install dir: %w", err)
-	} else {
-		archiveData, downloadErr := i.downloadBytes(ctx, i.opts.PGAdminURL)
-		if downloadErr != nil {
-			return fmt.Errorf("download pgAdmin archive: %w", downloadErr)
-		}
-		actualChecksum := fmt.Sprintf("%x", sha256.Sum256(archiveData))
-		expectedChecksum := strings.TrimSpace(i.opts.PGAdminSHA256)
-		if expectedChecksum != "" && !strings.EqualFold(expectedChecksum, actualChecksum) {
-			return fmt.Errorf("pgAdmin checksum mismatch: expected %s got %s", expectedChecksum, actualChecksum)
-		}
-		i.logf("[install_pgadmin] checksum verified: %s", actualChecksum)
-
-		archivePath, writeErr := writeTempBytes("aipanel-pgadmin-*.tar.gz", archiveData)
-		if writeErr != nil {
-			return fmt.Errorf("write pgAdmin archive temp file: %w", writeErr)
-		}
-		defer func() {
-			_ = os.Remove(archivePath)
-		}()
-
-		if i.opts.VerifyUpstreamSources &&
-			strings.TrimSpace(i.opts.PGAdminSignatureURL) != "" &&
-			strings.TrimSpace(i.opts.PGAdminFingerprint) != "" {
-			if err := i.verifyPGAdminSignature(ctx, archivePath); err != nil {
-				return err
-			}
-		}
-
-		extractDir, mkErr := os.MkdirTemp("", "aipanel-pgadmin-*")
-		if mkErr != nil {
-			return fmt.Errorf("create pgAdmin extract dir: %w", mkErr)
-		}
-		defer func() {
-			_ = os.RemoveAll(extractDir)
-		}()
-
-		if err := extractArchive(archivePath, extractDir); err != nil {
-			return fmt.Errorf("extract pgAdmin archive: %w", err)
-		}
-
-		sourceDir, err := detectSourceDir(extractDir)
-		if err != nil {
-			return fmt.Errorf("detect pgAdmin source dir: %w", err)
-		}
-		if _, err := os.Stat(filepath.Join(sourceDir, "web", "pgAdmin4.py")); err != nil {
-			return fmt.Errorf("pgAdmin archive missing web/pgAdmin4.py: %w", err)
-		}
-
-		if err := os.MkdirAll(filepath.Dir(installDir), 0o750); err != nil {
-			return fmt.Errorf("create pgAdmin parent dir: %w", err)
-		}
-		if err := copyDirectory(sourceDir, installDir); err != nil {
-			return fmt.Errorf("copy pgAdmin files: %w", err)
-		}
-	}
-
 	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		return fmt.Errorf("create pgAdmin data dir: %w", err)
 	}
@@ -2540,9 +2479,6 @@ func (i *Installer) installPGAdmin(ctx context.Context) error {
 	}
 	if err := os.MkdirAll(filepath.Join(dataDir, "storage"), 0o750); err != nil {
 		return fmt.Errorf("create pgAdmin storage dir: %w", err)
-	}
-	if err := i.writePGAdminConfig(installDir, dataDir); err != nil {
-		return err
 	}
 
 	if err := os.MkdirAll(filepath.Dir(venvDir), 0o750); err != nil {
@@ -2554,19 +2490,58 @@ func (i *Installer) installPGAdmin(ctx context.Context) error {
 
 	pipPath := filepath.Join(venvDir, "bin", "pip")
 	pythonPath := filepath.Join(venvDir, "bin", "python")
-	requirementsPath := filepath.Join(installDir, "requirements.txt")
-	setupPath := filepath.Join(installDir, "web", "setup.py")
 	if _, err := i.runner.Run(ctx, pipPath, "install", "--upgrade", "pip", "setuptools", "wheel"); err != nil {
 		return fmt.Errorf("upgrade pgAdmin pip tooling: %w", err)
+	}
+
+	wheelData, downloadErr := i.downloadBytes(ctx, i.opts.PGAdminURL)
+	if downloadErr != nil {
+		return fmt.Errorf("download pgAdmin wheel: %w", downloadErr)
+	}
+	actualChecksum := fmt.Sprintf("%x", sha256.Sum256(wheelData))
+	expectedChecksum := strings.TrimSpace(i.opts.PGAdminSHA256)
+	if expectedChecksum != "" && !strings.EqualFold(expectedChecksum, actualChecksum) {
+		return fmt.Errorf("pgAdmin checksum mismatch: expected %s got %s", expectedChecksum, actualChecksum)
+	}
+	i.logf("[install_pgadmin] checksum verified: %s", actualChecksum)
+
+	wheelPath, writeErr := writeTempBytes("aipanel-pgadmin-*.whl", wheelData)
+	if writeErr != nil {
+		return fmt.Errorf("write pgAdmin wheel temp file: %w", writeErr)
+	}
+	defer func() {
+		_ = os.Remove(wheelPath)
+	}()
+
+	if i.opts.VerifyUpstreamSources &&
+		strings.TrimSpace(i.opts.PGAdminSignatureURL) != "" &&
+		strings.TrimSpace(i.opts.PGAdminFingerprint) != "" {
+		if err := i.verifyPGAdminSignature(ctx, wheelPath); err != nil {
+			return err
+		}
+	}
+
+	if err := os.RemoveAll(installDir); err != nil {
+		return fmt.Errorf("reset pgAdmin install directory: %w", err)
+	}
+	if err := os.MkdirAll(installDir, 0o750); err != nil {
+		return fmt.Errorf("create pgAdmin install directory: %w", err)
 	}
 
 	postgresBin := filepath.Join(i.opts.RuntimeInstallDir, "postgresql", "current", "bin")
 	pipInstallCmd := strings.Join([]string{
 		"export PATH=" + shellQuote(postgresBin) + ":$PATH",
-		shellQuote(pipPath) + " install -r " + shellQuote(requirementsPath) + " gunicorn",
+		shellQuote(pipPath) + " install --target " + shellQuote(installDir) + " " + shellQuote(wheelPath),
+		shellQuote(pipPath) + " install gunicorn",
 	}, " && ")
 	if _, err := i.runner.Run(ctx, "bash", "-lc", pipInstallCmd); err != nil {
 		return fmt.Errorf("install pgAdmin Python dependencies: %w", err)
+	}
+
+	pgAdminPackageDir := filepath.Join(installDir, "pgadmin4")
+	setupPath := filepath.Join(pgAdminPackageDir, "setup.py")
+	if err := i.writePGAdminConfig(pgAdminPackageDir, dataDir); err != nil {
+		return err
 	}
 
 	adminEmail := strings.TrimSpace(i.opts.AdminEmail)
@@ -2591,6 +2566,7 @@ func (i *Installer) installPGAdmin(ctx context.Context) error {
 	}
 
 	setupDBCmd := strings.Join([]string{
+		"export PYTHONPATH=" + shellQuote(installDir),
 		"export PGADMIN_SETUP_EMAIL=$(cat " + shellQuote(emailPath) + ")",
 		"export PGADMIN_SETUP_PASSWORD=$(cat " + shellQuote(passwordPath) + ")",
 		shellQuote(pythonPath) + " " + shellQuote(setupPath) + " setup-db",
@@ -2600,6 +2576,7 @@ func (i *Installer) installPGAdmin(ctx context.Context) error {
 	}
 
 	addUserCmd := strings.Join([]string{
+		"export PYTHONPATH=" + shellQuote(installDir),
 		"EMAIL=$(cat " + shellQuote(emailPath) + ")",
 		"PASS=$(cat " + shellQuote(passwordPath) + ")",
 		shellQuote(pythonPath) + " " + shellQuote(setupPath) + " add-user \"$EMAIL\" \"$PASS\" --admin",
@@ -2696,7 +2673,7 @@ func (i *Installer) verifyPGAdminSignature(ctx context.Context, archivePath stri
 	return nil
 }
 
-func (i *Installer) writePGAdminConfig(installDir, dataDir string) error {
+func (i *Installer) writePGAdminConfig(packageDir, dataDir string) error {
 	_, port, err := net.SplitHostPort(strings.TrimSpace(i.opts.PGAdminListenAddr))
 	if err != nil {
 		return fmt.Errorf("parse pgAdmin listen address: %w", err)
@@ -2713,7 +2690,10 @@ DEFAULT_SERVER = "127.0.0.1"
 DEFAULT_SERVER_PORT = %s
 UPGRADE_CHECK_ENABLED = False
 `, dataDir, port)
-	configPath := filepath.Join(installDir, "web", "config_local.py")
+	if err := os.MkdirAll(packageDir, 0o750); err != nil {
+		return fmt.Errorf("create pgAdmin package dir for config: %w", err)
+	}
+	configPath := filepath.Join(packageDir, "config_local.py")
 	if err := writeTextFile(configPath, configBody, 0o640); err != nil {
 		return fmt.Errorf("write pgAdmin config_local.py: %w", err)
 	}
@@ -2725,6 +2705,7 @@ func renderPGAdminUnit(installDir, venvDir, listenAddr, routePath string) string
 	if pathValue == "" {
 		pathValue = defaultPGAdminRoutePath
 	}
+	appDir := filepath.Join(installDir, "pgadmin4")
 	return fmt.Sprintf(`[Unit]
 Description=aiPanel pgAdmin web service
 After=network.target
@@ -2733,15 +2714,16 @@ After=network.target
 Type=simple
 User=aipanel
 Group=aipanel
-WorkingDirectory=%s/web
+WorkingDirectory=%s
 Environment=SCRIPT_NAME=%s
-ExecStart=%s/bin/gunicorn --bind %s --workers=1 --threads=25 --chdir %s/web pgAdmin4:app
+Environment=PYTHONPATH=%s
+ExecStart=%s/bin/gunicorn --bind %s --workers=1 --threads=25 --chdir %s pgadmin4.pgAdmin4:app
 Restart=always
 RestartSec=3
 
 [Install]
 WantedBy=multi-user.target
-`, installDir, pathValue, venvDir, listenAddr, installDir)
+`, appDir, pathValue, installDir, venvDir, listenAddr, appDir)
 }
 
 func (i *Installer) createAdminUser(ctx context.Context) error {
@@ -3085,7 +3067,7 @@ func normalizeWebSubpath(path, fallback string) string {
 
 func (i *Installer) isPGAdminInstalled() bool {
 	installDir := pathInRootFS(i.opts.RootFSPath, i.opts.PGAdminInstallDir)
-	entrypoint := filepath.Join(installDir, "web", "pgAdmin4.py")
+	entrypoint := filepath.Join(installDir, "pgadmin4", "pgAdmin4.py")
 	_, err := os.Stat(entrypoint)
 	return err == nil
 }

@@ -780,17 +780,13 @@ func TestInstallerRun_OnlyInstallPHPMyAdminRequiresRoot(t *testing.T) {
 
 func TestInstallerRun_OnlyInstallPGAdmin(t *testing.T) {
 	root := t.TempDir()
-	archivePath := filepath.Join(root, "pgadmin.tar.gz")
-	if err := writeTarGzArtifactEntries(archivePath, map[string][]byte{
-		"pgadmin4-9.12/requirements.txt": []byte(""),
-		"pgadmin4-9.12/web/pgAdmin4.py":  []byte("print('ok')"),
-		"pgadmin4-9.12/web/setup.py":     []byte("print('setup')"),
-	}); err != nil {
-		t.Fatalf("write pgadmin archive: %v", err)
+	wheelPath := filepath.Join(root, "pgadmin.whl")
+	if err := os.WriteFile(wheelPath, []byte("dummy-wheel"), 0o600); err != nil {
+		t.Fatalf("write pgadmin wheel: %v", err)
 	}
-	sum, err := fileSHA256(archivePath)
+	sum, err := fileSHA256(wheelPath)
 	if err != nil {
-		t.Fatalf("checksum pgadmin archive: %v", err)
+		t.Fatalf("checksum pgadmin wheel: %v", err)
 	}
 
 	opts := DefaultOptions()
@@ -799,7 +795,7 @@ func TestInstallerRun_OnlyInstallPGAdmin(t *testing.T) {
 	opts.StateFilePath = filepath.Join(root, "var", "lib", "aipanel", ".installer-state.json")
 	opts.ReportFilePath = filepath.Join(root, "var", "lib", "aipanel", "install-report.json")
 	opts.LogFilePath = filepath.Join(root, "var", "log", "aipanel", "install.log")
-	opts.PGAdminURL = "file://" + archivePath
+	opts.PGAdminURL = "file://" + wheelPath
 	opts.PGAdminSHA256 = sum
 	opts.PGAdminSignatureURL = ""
 	opts.PGAdminFingerprint = ""
@@ -829,11 +825,7 @@ func TestInstallerRun_OnlyInstallPGAdmin(t *testing.T) {
 		t.Fatalf("expected only %s step, got %s", steps.InstallPGAdmin, report.Steps[0].Name)
 	}
 
-	installedEntrypoint := filepath.Join(root, "var", "lib", "aipanel", "pgadmin4", "web", "pgAdmin4.py")
-	if _, err := os.Stat(installedEntrypoint); err != nil {
-		t.Fatalf("expected pgAdmin entrypoint at %s: %v", installedEntrypoint, err)
-	}
-	configLocal := filepath.Join(root, "var", "lib", "aipanel", "pgadmin4", "web", "config_local.py")
+	configLocal := filepath.Join(root, "var", "lib", "aipanel", "pgadmin4", "pgadmin4", "config_local.py")
 	if _, err := os.Stat(configLocal); err != nil {
 		t.Fatalf("expected config_local.py at %s: %v", configLocal, err)
 	}
@@ -841,6 +833,9 @@ func TestInstallerRun_OnlyInstallPGAdmin(t *testing.T) {
 	joined := strings.Join(runner.commands, "\n")
 	if !strings.Contains(joined, "python3 -m venv") {
 		t.Fatalf("expected virtualenv setup command, got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "pip' install --target") && !strings.Contains(joined, "pip install --target") {
+		t.Fatalf("expected wheel target install command, got:\n%s", joined)
 	}
 	if !strings.Contains(joined, "setup-db") {
 		t.Fatalf("expected pgAdmin setup-db command, got:\n%s", joined)
