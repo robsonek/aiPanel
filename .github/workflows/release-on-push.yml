@@ -1,0 +1,115 @@
+name: Release (Push Build)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION: "1.25.7"
+  NODE_VERSION: "25.6.0"
+  PNPM_VERSION: "10.29.1"
+
+jobs:
+  build-frontend:
+    name: Build Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4.2.0
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Build frontend
+        run: cd web && pnpm install --frozen-lockfile && pnpm build
+
+      - name: Upload frontend dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+          if-no-files-found: error
+
+  build-binaries:
+    name: Build Binaries
+    needs: build-frontend
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Download frontend dist
+        uses: actions/download-artifact@v5
+        with:
+          name: web-dist
+          path: web/dist
+
+      - name: Build and package
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          binary_name="aipanel"
+          output_binary="dist/${binary_name}"
+          archive_name="aipanel-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+          archive_path="dist/${archive_name}"
+
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -trimpath -ldflags="-s -w" -o "${output_binary}" ./cmd/aipanel
+          tar -C dist -czf "${archive_path}" "${binary_name}"
+          sha256sum "${archive_path}" > "${archive_path}.sha256"
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            dist/aipanel-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+            dist/aipanel-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish Release
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all release assets
+        uses: actions/download-artifact@v5
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_id }}-${{ github.run_attempt }}
+          name: Build ${{ github.run_number }} (${{ github.sha }})
+          prerelease: true
+          make_latest: false
+          fail_on_unmatched_files: true
+          files: release-assets/*
+          body: |
+            Automated build created from push to `${{ github.ref_name }}`.
+            Commit: `${{ github.sha }}`
