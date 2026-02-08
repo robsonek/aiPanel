@@ -48,8 +48,6 @@ echo "${EXPECTED_SHA256}  /tmp/${ASSET}" | sha256sum -c -
 tar -xzf "/tmp/${ASSET}" -C /tmp
 sudo install -d -m 755 /etc/aipanel
 sudo install -m 755 /tmp/aipanel /usr/local/bin/aipanel
-sudo curl -fsSL "https://raw.githubusercontent.com/${REPO}/main/configs/sources/lock.json" -o /etc/aipanel/sources.lock.json
-sudo chmod 644 /etc/aipanel/sources.lock.json
 
 /usr/local/bin/aipanel --help >/dev/null
 echo "aiPanel binary installed successfully"
@@ -60,6 +58,10 @@ echo "aiPanel binary installed successfully"
 ```bash
 sudo aipanel install
 ```
+
+The installer automatically downloads the runtime lock (`configs/sources/lock.json`) on first run and stores it at:
+
+- `/etc/aipanel/sources.lock.json`
 
 ### 3. Run installer (non-interactive example with reverse proxy)
 
